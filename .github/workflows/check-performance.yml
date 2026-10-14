@@ -19,7 +19,7 @@ jobs:
         run: |
           mkdir -p out
           xcrun clang -fobjc-arc -DSG_PERFORMANCE_TEST -Wall -Wextra -Werror \
-            tests/performance-main.m performance/SGPerformance.m performance/SGPerfSettings.m -framework Foundation -o out/performance-tests
+            tests/performance-main.m performance/SGPerformance.m performance/SGPerfSettings.m performance/SGLightRendering.m -framework Foundation -o out/performance-tests
           out/performance-tests
           out/performance-tests inactive
           out/performance-tests background
@@ -30,6 +30,12 @@ jobs:
           out/performance-tests automatic-seeded-power
           out/performance-tests automatic-seeded-thermal
           out/performance-tests automatic-seeded-fair
+      - name: Test lighter visualizer processing and decorative transitions
+        run: |
+          xcrun clang -fobjc-arc -Wall -Wextra -Werror tests/light-rendering-main.m performance/SGLightRendering.m -framework Foundation -o out/light-rendering-tests
+          out/light-rendering-tests
+          out/light-rendering-tests seeded
+          out/light-rendering-tests unsupported-visualizer
       - name: Test guarded 0.51.0 lyrics repairs
         run: |
           python3 - <<'PYTHON'

@@ -83,6 +83,20 @@ NSNotificationName const UIApplicationDidBecomeActiveNotification = @"UIApplicat
 @end
 @implementation SGVisualizerTicker
 @end
+// The original setRunning: writes the requested flag and calls updateLink only
+// on change. Simulate processing here to verify policy integration, not GPU output.
+@interface SGVisualizerView : NSObject
+@property (nonatomic) BOOL running, processing;
+- (void)updateLink;
+@end
+@implementation SGVisualizerView
+- (void)setRunning:(BOOL)running {
+    if (_running == running) return;
+    _running = running;
+    [self updateLink];
+}
+- (void)updateLink { self.processing = self.running; }
+@end
 @interface SGTestAnimatedCoverModel : NSObject
 @property (nonatomic) BOOL playing;
 @property (nonatomic) BOOL clipPlaying;
@@ -432,7 +446,11 @@ int main(int argc, const char *argv[]) {
         cover.playing = YES;
         SGRPlayerAnimatedView *pausedCover = [SGRPlayerAnimatedView new];
         pausedCover.playing = NO;
+        SGVisualizerView *nativeVisualizer = [SGVisualizerView new];
+        nativeVisualizer.running = YES;
+        require(nativeVisualizer.processing, "normal visualizer processing is initially enabled");
         light.changed(YES);
+        require(!nativeVisualizer.running && !nativeVisualizer.processing, "manual Light mode stops upstream processing as well as drawing");
         SGTestAnimatedCoverModel *unrelatedCover = [SGTestAnimatedCoverModel new];
         unrelatedCover.playing = YES;
         require(unrelatedCover.playing, "cover hooks do not replace inherited superclass implementations globally");
@@ -457,6 +475,7 @@ int main(int argc, const char *argv[]) {
         require(!warpLink.isPaused && !lightGpu.isPaused && visualizerLink.isPaused,
                 "turning Light mode off restores the latest GPU owner states");
         require(cover.playing && !pausedCover.playing, "only covers requesting playback resume");
+        require(nativeVisualizer.running && nativeVisualizer.processing, "manual recovery restores the original visualizer request");
         require(!untouched.isPaused, "unrelated display links remain unchanged by Light mode");
         SGSetLightMode(YES);
         cover.playing = NO;
@@ -486,6 +505,7 @@ int main(int argc, const char *argv[]) {
         notify(NSProcessInfoPowerStateDidChangeNotification);
         require(!warpLink.isPaused && cover.playing, "automatic behavior stays opt-in while Low Power Mode is active");
         automatic.changed(YES);
+        require(!nativeVisualizer.running && !nativeVisualizer.processing, "automatic Low Power Mode stops upstream visualizer processing");
         require(warpLink.isPaused && !cover.playing && !reentrant.link.isPaused,
                 "enabling automatic mode applies existing Low Power Mode immediately");
         require([NSUserDefaults.standardUserDefaults boolForKey:automatic.key] &&
@@ -497,6 +517,7 @@ int main(int argc, const char *argv[]) {
         NSProcessInfo.processInfo.lowPowerModeEnabled = NO;
         notify(NSProcessInfoPowerStateDidChangeNotification);
         require(!warpLink.isPaused && cover.playing, "Low Power Mode ending restores requested visual states");
+        require(nativeVisualizer.running && nativeVisualizer.processing, "automatic recovery restores visualizer processing");
         NSProcessInfo.processInfo.thermalState = NSProcessInfoThermalStateFair;
         notify(NSProcessInfoThermalStateDidChangeNotification);
         require(!warpLink.isPaused, "Fair alone does not trigger a new heat reduction");
@@ -509,6 +530,7 @@ int main(int argc, const char *argv[]) {
         require(warpLink.isPaused, "Critical thermal pressure remains reduced");
         NSProcessInfo.processInfo.thermalState = NSProcessInfoThermalStateFair;
         notify(NSProcessInfoThermalStateDidChangeNotification);
+        require(!nativeVisualizer.running && !nativeVisualizer.processing, "cooling hysteresis keeps visualizer processing stopped");
         require(warpLink.isPaused && [status.value() isEqualToString:@"Light · Cooling"],
                 "heat recovery remains reduced through Fair to avoid repeated switching");
         NSProcessInfo.processInfo.thermalState = NSProcessInfoThermalStateNominal;
