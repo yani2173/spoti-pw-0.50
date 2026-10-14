@@ -82,6 +82,7 @@ In the optimized build, open **Mod Settings → Performance → Light mode** to 
 and the visualizer still and pause animated player covers. The switch is off by default, applies
 immediately and persists across launches. Music controls and synchronized lyrics stay available.
 Turning it off restores the visual effects requested by the app without overriding its pause states.
+The bottom of Mod Settings also has **Modified by Yani**; tap it to open https://yaniminchev.eu.
 
 The add-on is described in [performance/README.md](performance/README.md), including the ABI evidence
 from the real 0.51.0 binary. These are lifecycle and transition-workload optimizations; device frame pacing, memory, and battery
