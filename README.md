@@ -78,6 +78,11 @@ The builder rejects encrypted main executables and verifies that the app loads e
 Download **spoti.ipa** from the workflow's Artifacts, unzip it, then sign/install the enclosed IPA.
 Use a clean decrypted Spotify 9.1.90 or 9.1.78 IPA with no existing spoti.pw injection.
 
+In the optimized build, open **Mod Settings → Performance → Light mode** to keep moving backgrounds
+and the visualizer still and pause animated player covers. The switch is off by default, applies
+immediately and persists across launches. Music controls and synchronized lyrics stay available.
+Turning it off restores the visual effects requested by the app without overriding its pause states.
+
 The add-on is described in [performance/README.md](performance/README.md), including the ABI evidence
 from the real 0.51.0 binary. These are lifecycle and transition-workload optimizations; device frame pacing, memory, and battery
 use still need testing on an iPhone. It does not refactor the unavailable 0.51.0 source or hide its version.
