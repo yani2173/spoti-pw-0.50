@@ -70,6 +70,40 @@ NSNotificationName const UIApplicationDidBecomeActiveNotification = @"UIApplicat
 @end
 @implementation SGVisualizerTicker
 @end
+@interface SGRPlayerAnimatedView : NSObject
+@property (nonatomic) BOOL playing;
+@property (nonatomic) BOOL clipPlaying;
+@property (nonatomic) NSInteger windowMoves;
+@property (nonatomic, strong) id lastClip;
+- (void)didMoveToWindow;
+- (void)showClip:(id)clip;
+@end
+@implementation SGRPlayerAnimatedView
+- (void)didMoveToWindow { self.windowMoves++; }
+- (void)showClip:(id)clip { self.lastClip = clip; self.clipPlaying = self.playing; }
+@end
+@interface SGModRow : NSObject
+@property (nonatomic, copy) NSString *title, *subtitle, *key, *symbol;
+@property (nonatomic) BOOL defaultOn;
+@property (nonatomic, copy) void (^changed)(BOOL on);
+@end
+@implementation SGModRow
+@end
+@interface SGModSection : NSObject
+@property (nonatomic, copy) NSString *title, *footer;
+@property (nonatomic, copy) NSArray *rows;
+@end
+@implementation SGModSection
+@end
+@interface SGModPage : NSObject
+@property (nonatomic, copy) NSString *title;
+@property (nonatomic, copy) NSArray *sections;
+@property (nonatomic) NSInteger adoptions;
+- (void)adopt:(NSArray *)sections;
+@end
+@implementation SGModPage
+- (void)adopt:(NSArray *)sections { self.sections = sections; self.adoptions++; }
+@end
 static void require(BOOL condition, const char *message) {
     if (!condition) { fprintf(stderr, "FAIL: %s\n", message); exit(1); }
 }
@@ -78,6 +112,45 @@ static void notify(NSNotificationName name) {
 }
 int main(int argc, const char *argv[]) {
     @autoreleasepool {
+        [NSUserDefaults.standardUserDefaults removeObjectForKey:SGPerformanceLightModeKey];
+        if (argc > 1 && strcmp(argv[1], "unsupported-settings") == 0) {
+            Method setter = class_getInstanceMethod(SGModRow.class, @selector(setChanged:));
+            class_replaceMethod(SGModRow.class, @selector(setChanged:), method_getImplementation(setter), "v20@0:8B16");
+            SGInstallPerformance();
+            SGModPage *page = [SGModPage new];
+            page.title = @"Chroma";
+            [page adopt:@[]];
+            require(page.sections.count == 0 && page.adoptions == 1, "unsupported settings ABI leaves the original page untouched");
+            puts("PASS: unsupported settings signature guard");
+            return 0;
+        }
+        if (argc > 1 && strcmp(argv[1], "unsupported-cover") == 0) {
+            Method setter = class_getInstanceMethod(SGRPlayerAnimatedView.class, @selector(setPlaying:));
+            class_replaceMethod(SGRPlayerAnimatedView.class, @selector(setPlaying:), method_getImplementation(setter), "v24@0:8d16");
+            SGInstallPerformance();
+            SGSetLightMode(YES);
+            SGRPlayerAnimatedView *view = [SGRPlayerAnimatedView new];
+            view.playing = YES;
+            require(view.playing, "unsupported animated cover ABI is left untouched");
+            SGSetLightMode(NO);
+            puts("PASS: unsupported cover signature guard");
+            return 0;
+        }
+        if (argc > 1 && strcmp(argv[1], "light-mode-seeded") == 0) {
+            [NSUserDefaults.standardUserDefaults setBool:YES forKey:SGPerformanceLightModeKey];
+            SGInstallPerformance();
+            SGRWarpTicker *ticker = [SGRWarpTicker new];
+            CADisplayLink *gpu = [CADisplayLink displayLinkWithTarget:ticker selector:@selector(tick:)];
+            SGRKaraokeView *view = [SGRKaraokeView new];
+            CADisplayLink *lyrics = [CADisplayLink displayLinkWithTarget:view selector:@selector(tick)];
+            SGRPlayerAnimatedView *cover = [SGRPlayerAnimatedView new];
+            cover.playing = YES;
+            require(gpu.isPaused && !lyrics.isPaused && !cover.playing, "the saved Light mode applies to new GPU links and animated covers at startup");
+            SGSetLightMode(NO);
+            require(!gpu.isPaused && cover.playing, "saved Light mode can be disabled live");
+            puts("PASS: saved Light mode at startup");
+            return 0;
+        }
         if (argc > 1 && strcmp(argv[1], "unsupported-ticker") == 0) {
             Method tick = class_getInstanceMethod(SGVisualizerTicker.class, @selector(tick:));
             class_addMethod(SGVisualizerTicker.class, @selector(tick:), method_getImplementation(tick), "v24@0:8d16");
@@ -278,7 +351,77 @@ int main(int argc, const char *argv[]) {
         require(retainedOnlyByLink.calls == 1, "a link-owned ticker still receives callbacks");
         [transientLink invalidate];
         require(retainedOnlyByLink == nil, "invalidate releases the ticker while the link object is retained");
-        puts("PASS: lifecycle, inactive suspension, transition suspension, GPU ownership and callbacks, original frame rates");
+        SGModPage *root = [SGModPage new];
+        root.title = @"Chroma";
+        SGModSection *existing = [SGModSection new];
+        existing.rows = @[];
+        [root adopt:@[existing]];
+        require(root.sections.count == 2 && root.sections.firstObject == existing && root.adoptions == 1,
+                "the performance section is added without replacing original sections");
+        SGModSection *performance = root.sections.lastObject;
+        SGModRow *light = performance.rows.firstObject;
+        require([performance.title isEqualToString:@"Performance"] && [light.title isEqualToString:@"Light mode"] &&
+                [light.key isEqualToString:SGPerformanceLightModeKey] && !light.defaultOn && light.changed,
+                "the native settings model exposes a default-off Light mode switch");
+        [root adopt:root.sections];
+        require(root.sections.count == 2 && root.adoptions == 2, "re-adopting existing rows does not duplicate the switch");
+        [root adopt:@[existing]];
+        require(root.sections.count == 2 && root.adoptions == 3, "a rebuild regenerates exactly one performance section");
+        SGModPage *unrelatedPage = [SGModPage new];
+        unrelatedPage.title = @"Player";
+        [unrelatedPage adopt:@[existing]];
+        require(unrelatedPage.sections.count == 1, "other settings pages stay unchanged");
+        SGRPlayerAnimatedView *cover = [SGRPlayerAnimatedView new];
+        cover.playing = YES;
+        SGRPlayerAnimatedView *pausedCover = [SGRPlayerAnimatedView new];
+        pausedCover.playing = NO;
+        light.changed(YES);
+        require([NSUserDefaults.standardUserDefaults boolForKey:light.key], "the UI callback persists Light mode");
+        require(warpLink.isPaused && visualizerLink.isPaused && !reentrant.link.isPaused,
+                "Light mode suspends GPU work while leaving lyrics live");
+        NSInteger calls = reentrant.calls;
+        [reentrant.link fire];
+        require(reentrant.calls == calls + 1, "lyrics keep receiving their original callbacks in Light mode");
+        require(!cover.playing && !pausedCover.playing, "existing animated covers pause immediately");
+        [cover showClip:@"new track"];
+        require(!cover.clipPlaying && [cover.lastClip isEqual:@"new track"], "new artwork still loads with its video paused");
+        cover.playing = YES;
+        require(!cover.playing, "a new playback request cannot restart animated artwork in Light mode");
+        CADisplayLink *lightGpu = [CADisplayLink displayLinkWithTarget:warp selector:@selector(tick:)];
+        lightGpu.paused = NO;
+        require(lightGpu.isPaused, "new GPU links and owner resumes respect Light mode");
+        notify(@"spotifyglass.playerTransition");
+        notify(@"spotifyglass.playerTransitionEnded");
+        require(warpLink.isPaused && lightGpu.isPaused, "transition completion does not override Light mode");
+        light.changed(NO);
+        require(!warpLink.isPaused && !lightGpu.isPaused && visualizerLink.isPaused,
+                "turning Light mode off restores the latest GPU owner states");
+        require(cover.playing && !pausedCover.playing, "only covers requesting playback resume");
+        require(!untouched.isPaused, "unrelated display links remain unchanged by Light mode");
+        SGSetLightMode(YES);
+        cover.playing = NO;
+        visualizerLink.paused = NO;
+        SGSetLightMode(NO);
+        require(!cover.playing && !visualizerLink.isPaused, "owner changes made while Light mode is on are preserved");
+        SGSetLightMode(YES);
+        [NSUserDefaults.standardUserDefaults removeObjectForKey:SGPerformanceLightModeKey];
+        notify(NSUserDefaultsDidChangeNotification);
+        require(!warpLink.isPaused, "reset/import changes refresh Light mode without restarting");
+        notify(UIApplicationWillResignActiveNotification);
+        cover.playing = YES;
+        SGSetLightMode(YES);
+        SGSetLightMode(NO);
+        require(!cover.playing && warpLink.isPaused, "disabling Light mode cannot restart visual work while inactive");
+        notify(UIApplicationDidBecomeActiveNotification);
+        require(cover.playing && !warpLink.isPaused, "visual owner requests resume on activation");
+        __weak SGRPlayerAnimatedView *releasedCover;
+        @autoreleasepool {
+            SGRPlayerAnimatedView *temporaryCover = [SGRPlayerAnimatedView new];
+            releasedCover = temporaryCover;
+            [temporaryCover didMoveToWindow];
+        }
+        require(releasedCover == nil, "the animated cover registry holds no views strongly");
+        puts("PASS: lifecycle, transition suspension, settings integration, live/persistent Light mode, animated covers, owner state and lyrics");
     }
     return 0;
 }

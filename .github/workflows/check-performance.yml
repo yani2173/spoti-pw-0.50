@@ -19,11 +19,14 @@ jobs:
         run: |
           mkdir -p out
           xcrun clang -fobjc-arc -DSG_PERFORMANCE_TEST -Wall -Wextra -Werror \
-            tests/performance-main.m performance/SGPerformance.m -framework Foundation -o out/performance-tests
+            tests/performance-main.m performance/SGPerformance.m performance/SGPerfSettings.m -framework Foundation -o out/performance-tests
           out/performance-tests
           out/performance-tests inactive
           out/performance-tests background
           out/performance-tests unsupported-ticker
+          out/performance-tests unsupported-settings
+          out/performance-tests unsupported-cover
+          out/performance-tests light-mode-seeded
       - name: Build the iOS add-on
         run: scripts/build-performance.sh
       - name: Install real IPA packaging tools

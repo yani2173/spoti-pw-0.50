@@ -48,6 +48,38 @@ through Apple's original implementation. Runtime signature guards skip unsupport
   `v24@0:8@16`. Their owner properties have the `W` (weak) attribute in the binary's metadata.
 - Both transition notification strings exist in the original release.
 
+## Light mode
+
+The optimized build adds **Mod Settings → Performance → Light mode** to the original root settings
+page. It uses the existing `SGModRow`/`SGModSection` model and the root's `SGModPage.adopt:` path,
+so both initial creation and dynamic rebuilds include exactly one switch. Existing sections remain
+in place. Other settings pages are unchanged, and unsupported settings signatures skip installation.
+
+The key is `spotifyglass.performance.lightMode`, default off, in the app's standard defaults.
+Its native row writes the preference and invokes the changed callback; the add-on applies it
+immediately. The saved value is read at installation. Default changes also refresh it, including
+reset/import, and the key uses the prefix already covered by the mod's settings backup/reset.
+
+While on, the mode suspends the verified moving-background and visualizer display links. Lyrics
+continue with their original timing and frame-rate settings. GPU links created or resumed while
+the mode is active stay paused. Owner pause requests and transition/inactive suspension still win
+when it is turned off. Background colors and artwork updates can still draw their static contents;
+the mode is scoped to continuous decorative animation, rather than all UIKit animations.
+
+Animated player covers use a separate weak view registry. `SGRPlayerAnimatedView.setPlaying:` at
+`0xfe538` has signature `v20@0:8B16` and updates its clips. `_playing` is a one-byte BOOL at offset
+40 in this release. Its `showClip:` (`0xfdd90`) reads that flag at `0xfde88` before setting the new
+clip's playback, so the add-on clamps it before a new clip is shown. `didMoveToWindow` (`0xfd6ac`)
+also registers views. Requested playback is kept separately and restored when allowed; owner-paused
+covers stay paused and inactive apps cannot restart them. The class/ivar/method signatures and KVC
+ivar access are checked before hooking. Nothing in the audio playback engine is changed.
+
+The settings ABI evidence is `SGModPage.adopt:` (`0x15b4e8`, `v24@0:8@16`), invoked after the
+title is set by `initWithTitle:intro:sections:footer:` (`0x15b314`). `initWithTitle:build:` and
+`rebuild` use the same adoption path. The root builder (`0x3e880`) supplies CFString `0x4ac758`,
+whose value is `Chroma`. Row and section accessor signatures were verified in the same binary.
+No source from the older release is linked into the add-on.
+
 ## Packaging and validation
 
 IPA preparation checks the main executable's encryption commands in every arm64 slice, including
@@ -59,5 +91,8 @@ The macOS tests compile the actual implementation against UIKit stand-ins and co
 ownership, paused-link cleanup, off-main release, inactive/background launches, nested and queued
 notifications, owner pauses, transition suspension, late GPU links, callback forwarding, GPU ticker
 ownership, invalidation, unsupported signatures, and preserved frame rates. CI compiles the arm64
-iOS dylib. Real-kit packaging is tested with synthetic executables. Actual Spotify frame pacing,
+iOS dylib. Light mode tests cover native settings integration, rebuild deduplication, defaults,
+startup restoration, live switching, paused/new GPU links, lyrics, animated cover requests,
+new clips, inactive restoration, reset, weak view ownership and unsupported settings/cover ABIs.
+Real-kit packaging is tested with synthetic executables. Actual Spotify frame pacing,
 memory and battery use still require testing on an iPhone; no measured device speedup is claimed.
