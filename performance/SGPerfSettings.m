@@ -1,6 +1,11 @@
 #import "SGPerfSettings.h"
 #import "SGPerformance.h"
 #import "SGPerfABI.h"
+#ifdef SG_PERFORMANCE_TEST
+#import "../tests/PerformanceUIKitStubs.h"
+#else
+#import <UIKit/UIKit.h>
+#endif
 
 // Runtime interfaces verified in the official 0.51.0 binary. No older App/ source is linked.
 @protocol SGPerfSettingsRow <NSObject>
@@ -10,6 +15,7 @@
 @property (nonatomic, copy) NSString *symbol;
 @property (nonatomic) BOOL defaultOn;
 @property (nonatomic, copy) void (^changed)(BOOL on);
+@property (nonatomic, copy) void (^action)(void);
 @end
 
 @protocol SGPerfSettingsSection <NSObject>
@@ -25,6 +31,7 @@
 
 static Class sg_rowClass, sg_sectionClass;
 static void (*sg_adopt)(id, SEL, NSArray *);
+static char sg_creditKey;
 
 static void adoptSections(id<SGPerfSettingsPage> page, SEL cmd, NSArray *sections) {
     // The real root builder uses title "Chroma". Its rebuild path calls adopt: too.
@@ -33,6 +40,7 @@ static void adoptSections(id<SGPerfSettingsPage> page, SEL cmd, NSArray *section
         sg_adopt(page, cmd, sections);
         return;
     }
+    BOOL hasLightMode = NO, hasCredit = NO;
     for (id<SGPerfSettingsSection> section in sections) {
         if (![section isKindOfClass:sg_sectionClass] || ![section.rows isKindOfClass:NSArray.class]) {
             sg_adopt(page, cmd, sections);
@@ -40,23 +48,41 @@ static void adoptSections(id<SGPerfSettingsPage> page, SEL cmd, NSArray *section
         }
         for (id<SGPerfSettingsRow> row in section.rows) {
             if ([row isKindOfClass:sg_rowClass] && [row.key isEqualToString:SGPerformanceLightModeKey]) {
-                sg_adopt(page, cmd, sections);
-                return;
+                hasLightMode = YES;
             }
+            if (objc_getAssociatedObject(row, &sg_creditKey)) hasCredit = YES;
         }
     }
-    id<SGPerfSettingsRow> row = [sg_rowClass new];
-    row.title = @"Light mode";
-    row.subtitle = @"Keep backgrounds still and pause animated covers";
-    row.key = SGPerformanceLightModeKey;
-    row.defaultOn = NO;
-    row.symbol = @"leaf";
-    row.changed = ^(BOOL on) { SGSetLightMode(on); };
-    id<SGPerfSettingsSection> section = [sg_sectionClass new];
-    section.title = @"Performance";
-    section.rows = @[row];
-    section.footer = @"Applies immediately. Music controls and synchronized lyrics stay available.";
-    sg_adopt(page, cmd, [sections arrayByAddingObject:section]);
+    NSMutableArray *augmented = [sections mutableCopy];
+    if (!hasLightMode) {
+        id<SGPerfSettingsRow> row = [sg_rowClass new];
+        row.title = @"Light mode";
+        row.subtitle = @"Keep backgrounds still and pause animated covers";
+        row.key = SGPerformanceLightModeKey;
+        row.defaultOn = NO;
+        row.symbol = @"leaf";
+        row.changed = ^(BOOL on) { SGSetLightMode(on); };
+        id<SGPerfSettingsSection> section = [sg_sectionClass new];
+        section.title = @"Performance";
+        section.rows = @[row];
+        section.footer = @"Applies immediately. Music controls and synchronized lyrics stay available.";
+        [augmented addObject:section];
+    }
+    if (!hasCredit) {
+        id<SGPerfSettingsRow> credit = [sg_rowClass new];
+        credit.title = @"Modified by Yani";
+        credit.subtitle = @"yaniminchev.eu";
+        credit.symbol = @"globe";
+        credit.action = ^{
+            [UIApplication.sharedApplication openURL:[NSURL URLWithString:@"https://yaniminchev.eu"]
+                                              options:@{} completionHandler:nil];
+        };
+        objc_setAssociatedObject(credit, &sg_creditKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        id<SGPerfSettingsSection> attribution = [sg_sectionClass new];
+        attribution.rows = @[credit];
+        [augmented addObject:attribution];
+    }
+    sg_adopt(page, cmd, augmented);
 }
 
 void SGInstallPerformanceSettings(void) {
@@ -67,7 +93,7 @@ void SGInstallPerformanceSettings(void) {
         sg_sectionClass = NSClassFromString(@"SGModSection");
         if (!SGPerfHasMethod(pageClass, @selector(adopt:), 'v', "@") ||
             !SGPerfHasMethod(pageClass, @selector(title), '@', "")) return;
-        for (NSString *name in @[@"setTitle:", @"setSubtitle:", @"setKey:", @"setSymbol:", @"setChanged:"])
+        for (NSString *name in @[@"setTitle:", @"setSubtitle:", @"setKey:", @"setSymbol:", @"setChanged:", @"setAction:"])
             if (!SGPerfHasMethod(sg_rowClass, NSSelectorFromString(name), 'v', "@")) return;
         if (!SGPerfHasMethod(sg_rowClass, @selector(setDefaultOn:), 'v', "B") ||
             !SGPerfHasMethod(sg_rowClass, @selector(key), '@', "")) return;

@@ -11,6 +11,7 @@ extern NSNotificationName const UIApplicationDidBecomeActiveNotification;
 @interface UIApplication : NSObject
 + (instancetype)sharedApplication;
 @property (nonatomic) UIApplicationState applicationState;
+- (void)openURL:(NSURL *)url options:(NSDictionary *)options completionHandler:(void (^)(BOOL success))completion;
 @end
 @interface CADisplayLink : NSObject
 + (instancetype)displayLinkWithTarget:(id)target selector:(SEL)selector;

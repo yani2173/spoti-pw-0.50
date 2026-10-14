@@ -8,6 +8,11 @@ static BOOL nilFactory;
 NSNotificationName const UIApplicationWillResignActiveNotification = @"UIApplicationWillResignActiveNotification";
 NSNotificationName const UIApplicationDidBecomeActiveNotification = @"UIApplicationDidBecomeActiveNotification";
 @implementation UIApplication
+- (void)openURL:(NSURL *)url options:(NSDictionary *)options completionHandler:(void (^)(BOOL))completion {
+    (void)url;
+    (void)options;
+    if (completion) completion(YES);
+}
 + (instancetype)sharedApplication {
     static UIApplication *app;
     static dispatch_once_t once;
@@ -90,6 +95,7 @@ NSNotificationName const UIApplicationDidBecomeActiveNotification = @"UIApplicat
 @property (nonatomic, copy) NSString *title, *subtitle, *key, *symbol;
 @property (nonatomic) BOOL defaultOn;
 @property (nonatomic, copy) void (^changed)(BOOL on);
+@property (nonatomic, copy) void (^action)(void);
 @end
 @implementation SGTestSettingsRowModel
 @end
@@ -366,17 +372,17 @@ int main(int argc, const char *argv[]) {
         SGModSection *existing = [SGModSection new];
         existing.rows = @[];
         [root adopt:@[existing]];
-        require(root.sections.count == 2 && root.sections.firstObject == existing && root.adoptions == 1,
+        require(root.sections.count == 3 && root.sections.firstObject == existing && root.adoptions == 1,
                 "the performance section is added without replacing original sections");
-        SGModSection *performance = root.sections.lastObject;
+        SGModSection *performance = root.sections[1];
         SGModRow *light = performance.rows.firstObject;
         require([performance.title isEqualToString:@"Performance"] && [light.title isEqualToString:@"Light mode"] &&
                 [light.key isEqualToString:SGPerformanceLightModeKey] && !light.defaultOn && light.changed,
                 "the native settings model exposes a default-off Light mode switch");
         [root adopt:root.sections];
-        require(root.sections.count == 2 && root.adoptions == 2, "re-adopting existing rows does not duplicate the switch");
+        require(root.sections.count == 3 && root.adoptions == 2, "re-adopting existing rows does not duplicate the sections");
         [root adopt:@[existing]];
-        require(root.sections.count == 2 && root.adoptions == 3, "a rebuild regenerates exactly one performance section");
+        require(root.sections.count == 3 && root.adoptions == 3, "a rebuild regenerates the add-on sections once");
         SGModPage *unrelatedPage = [SGModPage new];
         unrelatedPage.title = @"Player";
         [unrelatedPage adopt:@[existing]];
