@@ -21,6 +21,8 @@ jobs:
           xcrun clang -fobjc-arc -DSG_PERFORMANCE_TEST -Wall -Wextra -Werror \
             tests/performance-main.m performance/SGPerformance.m -framework Foundation -o out/performance-tests
           out/performance-tests
+          out/performance-tests inactive
+          out/performance-tests background
       - name: Build the iOS add-on
         run: scripts/build-performance.sh
       - uses: actions/upload-artifact@v5

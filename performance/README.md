@@ -12,6 +12,18 @@ paused during the interval in which UIApplication still reports Active. DidBecom
 the pause state requested by the owner, including requests made while inactive. Other display link
 targets, callbacks, timestamps, and the original 80–120 Hz range are kept as they are.
 
+The view also owns a lifetime sentinel with weak link references. When the view is released,
+all its links are invalidated on the main thread, including owner-paused links that would never
+get another cleanup tick. Installation reads the initial application state, so background launches
+cannot start a link by requesting an owner resume. Nested notifications use the latest state, and
+generation checks discard older off-main notifications queued before a newer main-thread event.
+State sweeps avoid calling the original pause setter when the effective value is unchanged.
+
+IPA preparation checks the main executable's Mach-O encryption commands in every arm64 slice
+(including universal files) before injection. The final check also requires load commands for both
+original dylibs and, in optimized mode, the add-on after the core. Merely copying an add-on into
+Frameworks without loading it fails the build. These checks do not decrypt an IPA.
+
 The class, callback, and argument passing were verified against the actual release binary:
 
 - `SGRKaraokeView.startLink` at `0x8be6c`, signature `v16@0:8`.
@@ -27,5 +39,7 @@ refactoring the unavailable newer source still requires that source.
 
 The macOS test builds the actual implementation against UIKit stand-ins to check ownership,
 callbacks, background suspension, late links, resuming, preserving owner pauses, other targets,
-and frame rates. CI also compiles the iOS dylib. Device frame pacing, memory, and battery use still
+and frame rates. It also checks initially inactive/background launches, nested and queued
+notifications, immediate cleanup of paused links, and off-main view release. CI compiles the iOS dylib.
+Device frame pacing, memory, and battery use still
 need testing on a real decrypted Spotify 9.1.78 IPA and an iPhone; no measured speedup is claimed.

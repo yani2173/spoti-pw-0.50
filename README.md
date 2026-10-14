@@ -66,11 +66,13 @@ The workflow offers two modes:
 
 - **optimized-0.50.0** (default): original 0.50.0 plus an independent performance add-on. It breaks
   the lyrics view/display-link retention cycle and suspends lyrics animation while the app is inactive,
-  including late-created links. Original callbacks, owner pause requests, and 80–120 Hz settings are preserved.
+  including late-created links and background launches. Links are cleaned up when their view is released,
+  even while paused. Original callbacks, owner pause requests, and 80–120 Hz settings are preserved.
 - **official-0.50.0**: the unmodified official build, for comparison.
 
 Both modes verify the official kit's published SHA-256 and compare the final core's Mach-O code/data
 sections to that kit after signing. The optimized output is `spoti.pw-0.50.0-optimized.ipa`.
+The builder rejects encrypted main executables and verifies that the app loads every required mod dylib.
 Download **spoti.ipa** from the workflow's Artifacts, unzip it, then sign/install the enclosed IPA.
 Use a clean decrypted Spotify 9.1.78 IPA with no existing spoti.pw injection.
 

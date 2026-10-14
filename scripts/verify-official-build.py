@@ -2,10 +2,14 @@
 """Verify that the built IPA retains the official 0.50.0 code and data sections."""
 import importlib.util
 import json
+import plistlib
 import struct
 import sys
 import zipfile
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from sg_macho import dylib_loads, validate_decrypted_executable
 
 
 def sections(data):
@@ -52,6 +56,23 @@ def verify(ipa, kit, optimized=False):
             raise ValueError("The built IPA does not preserve the official 0.50.0 code/data")
         if optimized and roots[0] + "Frameworks/SGPerformance050.dylib" not in built.namelist():
             raise ValueError("Optimized build is missing its performance add-on")
+        info = plistlib.loads(built.read(roots[0] + "Info.plist"))
+        executable = info.get("CFBundleExecutable", "")
+        if not isinstance(executable, str) or not executable or "/" in executable or executable in (".", ".."):
+            raise ValueError("Built IPA has no valid main executable")
+        main = built.read(roots[0] + executable)
+        validate_decrypted_executable(main)
+        required = ["@rpath/SpotifyGlassAppGroups.dylib", "@rpath/spotifyglass.dylib"]
+        if optimized:
+            required.append("@rpath/SGPerformance050.dylib")
+        for path in required:
+            if roots[0] + "Frameworks/" + path.removeprefix("@rpath/") not in built.namelist():
+                raise ValueError(f"Built IPA is missing {path}")
+        for loads in dylib_loads(main):
+            if any(path not in loads for path in required):
+                raise ValueError("Built IPA does not load all required mod dylibs")
+            if optimized and loads.index(required[1]) >= loads.index(required[2]):
+                raise ValueError("Performance add-on must load after the original 0.50.0 core")
 
 
 if __name__ == "__main__":
