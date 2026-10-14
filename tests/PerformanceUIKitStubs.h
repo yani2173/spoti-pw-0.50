@@ -13,6 +13,7 @@ extern NSNotificationName const UIApplicationDidBecomeActiveNotification;
 + (instancetype)displayLinkWithTarget:(id)target selector:(SEL)selector;
 @property (nonatomic, getter=isPaused) BOOL paused;
 @property (nonatomic) NSInteger preferredFramesPerSecond;
+@property (nonatomic, copy) void (^pauseObserver)(BOOL paused);
 @property (nonatomic, readonly) id target;
 @property (nonatomic, readonly) BOOL invalidated;
 - (void)invalidate;

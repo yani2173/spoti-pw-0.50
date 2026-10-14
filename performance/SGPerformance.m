@@ -74,7 +74,8 @@ static void setPaused(id link, SEL cmd, BOOL paused) {
 
 static void setActive(BOOL active) {
     sg_inactive = !active;
-    for (SGPerfDisplayTarget *target in sg_targets) {
+    // A setter observer can create another link. Enumerate a snapshot so re-entrancy is safe.
+    for (SGPerfDisplayTarget *target in sg_targets.allObjects) {
         if (!active) pauseTarget(target);
         else if (target.link) sg_pause(target.link, @selector(setPaused:), target.ownerPaused);
     }

@@ -17,6 +17,7 @@ NSNotificationName const UIApplicationDidBecomeActiveNotification = @"UIApplicat
     SEL _selector;
     BOOL _invalidated;
 }
+@synthesize paused = _paused;
 + (instancetype)displayLinkWithTarget:(id)target selector:(SEL)selector {
     CADisplayLink *link = [self new];
     link->_target = target;
@@ -25,6 +26,10 @@ NSNotificationName const UIApplicationDidBecomeActiveNotification = @"UIApplicat
 }
 - (id)target { return _target; }
 - (BOOL)invalidated { return _invalidated; }
+- (void)setPaused:(BOOL)paused {
+    _paused = paused;
+    if (self.pauseObserver) self.pauseObserver(paused);
+}
 - (void)invalidate { _invalidated = YES; _target = nil; }
 - (void)fire {
     id target = _target;
@@ -86,6 +91,16 @@ int main(void) {
         require(link.isPaused, "the owner cannot restart lyrics during inactive suspension");
         notify(UIApplicationDidBecomeActiveNotification);
         require(!link.isPaused, "an owner resume requested while inactive applies on activation");
+        SGRKaraokeView *reentrant = [SGRKaraokeView new];
+        link.pauseObserver = ^(BOOL paused) {
+            if (paused && !reentrant.link)
+                reentrant.link = [CADisplayLink displayLinkWithTarget:reentrant selector:@selector(tick)];
+        };
+        notify(UIApplicationWillResignActiveNotification);
+        require(reentrant.link.isPaused, "a link created by a pause observer is safely suspended");
+        notify(UIApplicationDidBecomeActiveNotification);
+        require(!reentrant.link.isPaused, "the re-entrant link resumes without a collection mutation");
+        link.pauseObserver = nil;
         OtherTarget *other = [OtherTarget new];
         CADisplayLink *untouched = [CADisplayLink displayLinkWithTarget:other selector:@selector(tick)];
         require(untouched.target == other, "other targets retain Apple's original behavior");

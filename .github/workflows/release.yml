@@ -13,6 +13,9 @@ permissions:
 
 jobs:
   release-please:
+    # The public source is 0.22.0; this fork builds from the actual 0.50.0 kit instead.
+    # Keep upstream's source-release automation from publishing an older-source build here.
+    if: github.repository == 'skopevoj/spoti.pw'
     runs-on: ubuntu-latest
     outputs:
       created: ${{ steps.release.outputs.release_created }}

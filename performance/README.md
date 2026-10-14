@@ -22,8 +22,8 @@ The class, callback, and argument passing were verified against the actual relea
 - `0x8befc` stores the returned link in the view's `_link` ivar.
 
 Runtime installation checks the class and zero-argument void callback before installing, and does
-nothing when the expected ABI is absent. The add-on touches no Spotify private views or paid-feature
-checks. It is an isolated lifecycle optimization, not a refactoring of the unavailable newer source.
+nothing when the expected ABI is absent. Its scope is the lyrics display-link lifecycle;
+refactoring the unavailable newer source still requires that source.
 
 The macOS test builds the actual implementation against UIKit stand-ins to check ownership,
 callbacks, background suspension, late links, resuming, preserving owner pauses, other targets,
