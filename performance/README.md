@@ -80,6 +80,27 @@ title is set by `initWithTitle:intro:sections:footer:` (`0x15b314`). `initWithTi
 whose value is `Chroma`. Row and section accessor signatures were verified in the same binary.
 No source from the older release is linked into the add-on.
 
+## Automatic Light mode
+
+The Performance section also offers **Automatic Light mode**, default off, stored separately under
+`spotifyglass.performance.automaticLightMode`. The effective mode is the manual request OR an
+enabled automatic request while Low Power Mode is on or the thermal reduction is latched.
+Automatic activation never rewrites the manual preference. Disabling automatic mode leaves manual
+Light mode intact; resetting/importing the settings updates both preferences live.
+
+The policy reads public `NSProcessInfo.lowPowerModeEnabled` and `thermalState` values. Serious or
+Critical pressure latches the thermal reduction; it stays latched through Fair and clears at Nominal.
+Starting at Fair does not trigger a new reduction. This avoids cycling effects repeatedly during
+cooling. Ending one trigger cannot override another trigger, an owner pause, an inactive app or a
+manual request. GPU/cover behavior and the unchanged lyrics path use the same effective mode as before.
+
+Power, thermal and relevant preference notifications refresh conditions on the main thread. Queued
+notifications read current conditions rather than capturing stale values. Foreground activation also
+refreshes conditions before visual work resumes, covering changes missed during suspension. Unrelated
+defaults notifications skip policy updates. There is no per-frame or background polling timer.
+The native settings page displays a **Status** value from cached state while it is open: Normal,
+Light · Manual, Light · Low Power, Light · Heat, or Light · Cooling.
+
 ## Packaging and validation
 
 IPA preparation checks the main executable's encryption commands in every arm64 slice, including
@@ -94,5 +115,8 @@ ownership, invalidation, unsupported signatures, and preserved frame rates. CI c
 iOS dylib. Light mode tests cover native settings integration, rebuild deduplication, defaults,
 startup restoration, live switching, paused/new GPU links, lyrics, animated cover requests,
 new clips, inactive restoration, reset, weak view ownership and unsupported settings/cover ABIs.
+Automatic-mode checks cover opt-in defaults, live and saved startup behavior, Low Power Mode,
+Serious/Critical pressure, cooling hysteresis, Fair startup, overlapping triggers, manual priority,
+status changes, owner pauses, missed foreground conditions, off-main/stale notifications and reset.
 Real-kit packaging is tested with synthetic executables. Actual Spotify frame pacing,
 memory and battery use still require testing on an iPhone; no measured device speedup is claimed.

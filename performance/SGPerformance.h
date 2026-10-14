@@ -5,3 +5,6 @@ void SGInstallPerformance(void);
 
 extern NSString *const SGPerformanceLightModeKey;
 void SGSetLightMode(BOOL on);
+extern NSString *const SGPerformanceAutomaticLightModeKey;
+void SGSetAutomaticLightMode(BOOL on);
+NSString *SGPerformanceLightModeStatus(void);
