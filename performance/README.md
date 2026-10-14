@@ -120,3 +120,41 @@ Serious/Critical pressure, cooling hysteresis, Fair startup, overlapping trigger
 status changes, owner pauses, missed foreground conditions, off-main/stale notifications and reset.
 Real-kit packaging is tested with synthetic executables. Actual Spotify frame pacing,
 memory and battery use still require testing on an iPhone; no measured device speedup is claimed.
+
+## Guarded 0.51.0 lyrics repairs
+
+`SGLyricsRepair.m` repairs three paths verified in the compiled official core. Its installer
+requires arm64 Mach-O UUID `2A5B5C1F-DAEA-35BE-BA16-8661A6C6F24E`, the expected segment layout,
+instruction fingerprints, original selector references, and compatible public method signatures.
+An unsupported image is left alone. This is independent of Light mode and Plus access.
+
+- The JSON lyrics parser at `0x2579e8` enumerates `lines` and converts `startTimeMs` without
+  checking their types. Only its JSON decode result is sanitized: non-array collections become
+  empty, and rows with explicit null/object/array timestamps are skipped. Valid content, missing
+  timestamps and existing string/number conversion semantics are preserved. Other JSON consumers,
+  decoding options and errors pass through unchanged.
+- The same parser's first-byte format check at `0x257a34` misclassifies whitespace-prefixed JSON
+  as protobuf. Only that single-byte read receives a pointer after JSON whitespace when followed
+  by `{`. Full data reads and protobuf input retain their original pointer and length.
+- The lock-screen lyrics restore branch publishes its cached metadata at `0x24fcc0` without
+  updating progress. It now uses the original elapsed-time helper at `0x24ff38`, which accounts
+  for the player's clock, seeks and playback rate. The matching cached timestamp is read under
+  the original lock. A changed snapshot, invalid clock or unsupported caller passes through;
+  all metadata fields except elapsed time are retained. This does not seek the audio player.
+
+The add-on adds unique forwarding selectors and rebinds three aligned pointers in the original
+image's writable `__DATA.__objc_selrefs`: `bytes` at `0x5040a8`,
+`JSONObjectWithData:options:error:` at `0x5038a0`, and `setNowPlayingInfo:` at `0x507d30`.
+The forwarding functions check return addresses `0x257a34`, `0x257a58`, and `0x24fcc4` respectively.
+Existing Foundation/MediaPlayer implementations are not replaced. Other callers, including
+Spotify and the core's ordinary lyric updates, retain their original behavior. No executable
+instructions or packaged core sections are changed. Original lock/cache/timestamp globals are
+`0x53fca8`, `0x53fcc8`, and `0x53fce8`; the elapsed helper ABI is
+`double (id metadata, double reportedAt, double now)` using `CFAbsoluteTimeGetCurrent()`.
+
+The additional macOS tests use real Foundation decoding and an image fixture from the actual kit,
+with simulated selector relocation and a stand-in metadata center/player clock. They cover malformed
+provider values, valid/whitespace/protobuf inputs, forwarding, errors, version/instruction guards,
+clock changes and immutable metadata. CI also builds the iOS code and verifies packaged core sections.
+These are not end-to-end tests of the iOS core or lock-screen UI; check lyrics loading and disabling
+lock-screen lyrics during playback on a device after installing the optimized build.
