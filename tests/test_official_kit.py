@@ -44,7 +44,7 @@ class OfficialKitTests(unittest.TestCase):
             }),
         }
         self.manifest = {
-            "format": 1, "version": "0.50.0", "spotify": "9.1.78",
+            "format": 1, "version": "0.51.0", "spotify": "9.1.90", "spotifyVersions": ["9.1.90", "9.1.78"],
             "infoPlist": {
                 "set": {"UIDesignRequiresCompatibility": False, "MusicHapticsSupported": True},
                 "union": {"NSBonjourServices": ["_spotify-connect._tcp", "_googlecast._tcp"]},
@@ -104,7 +104,21 @@ class OfficialKitTests(unittest.TestCase):
     def test_other_spotify_versions_are_rejected(self):
         self.info["CFBundleShortVersionString"] = "9.2.0"
         self.write_ipa()
-        with self.assertRaisesRegex(ValueError, "requires Spotify 9.1.78"):
+        with self.assertRaisesRegex(ValueError, "requires Spotify 9.1.90 or 9.1.78"):
+            self.prepare()
+
+    def test_new_spotify_version_and_extension_versions_are_supported(self):
+        self.info["CFBundleShortVersionString"] = "9.1.90"
+        self.info["CFBundleVersion"] = "91900000"
+        self.write_ipa()
+        self.prepare()
+        extension = plistlib.loads((self.folder / "prepared/files" / self.extension).read_bytes())
+        self.assertEqual(extension["CFBundleShortVersionString"], "9.1.90")
+        self.assertEqual(extension["CFBundleVersion"], "91900000")
+
+    def test_previous_performance_addon_is_rejected(self):
+        self.write_ipa({self.app + "Frameworks/SGPerformance050.dylib": b"old addon"})
+        with self.assertRaisesRegex(ValueError, "clean decrypted"):
             self.prepare()
 
     def test_existing_mod_is_rejected(self):
@@ -113,7 +127,7 @@ class OfficialKitTests(unittest.TestCase):
             self.prepare()
 
     def test_existing_performance_addon_is_rejected(self):
-        self.write_ipa({self.app + "Frameworks/SGPerformance050.dylib": b"old addon"})
+        self.write_ipa({self.app + "Frameworks/SGPerformance051.dylib": b"old addon"})
         with self.assertRaisesRegex(ValueError, "clean decrypted"):
             self.prepare()
 
@@ -142,9 +156,9 @@ class OfficialKitTests(unittest.TestCase):
         self.assertFalse((self.folder / "prepared").exists())
 
     def test_another_release_is_rejected(self):
-        self.manifest["version"] = "0.51.0"
+        self.manifest["version"] = "0.52.0"
         self.write_kit()
-        with self.assertRaisesRegex(ValueError, "version 0.50.0"):
+        with self.assertRaisesRegex(ValueError, "version 0.51.0"):
             self.prepare()
 
     def test_archive_checksum_is_checked(self):

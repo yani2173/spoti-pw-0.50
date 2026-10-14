@@ -1,4 +1,4 @@
-name: Check 0.50.0 performance add-on
+name: Check 0.51.0 performance add-on
 on:
   push:
     branches: ['optimize/**']
@@ -23,9 +23,19 @@ jobs:
           out/performance-tests
           out/performance-tests inactive
           out/performance-tests background
+          out/performance-tests unsupported-ticker
       - name: Build the iOS add-on
         run: scripts/build-performance.sh
+      - name: Install real IPA packaging tools
+        run: |
+          brew install ldid
+          python3 -m pip install --break-system-packages git+https://github.com/asdfzxcvbn/pyzule-rw.git@740d3716dcd98c20c000f12cdb88f1f0b2a533a4
+      - name: Package official and optimized 0.51.0 for both supported Spotify versions
+        env:
+          SG_OFFICIAL_KIT: ${{ github.workspace }}/vendor/releases/0.51.0/spoti.pw-0.51.0-kit.zip
+          SG_PERFORMANCE_DYLIB: ${{ github.workspace }}/out/SGPerformance051.dylib
+        run: python3 -m unittest discover -s tests -v
       - uses: actions/upload-artifact@v5
         with:
-          name: SGPerformance050
-          path: out/SGPerformance050.dylib
+          name: SGPerformance051
+          path: out/SGPerformance051.dylib

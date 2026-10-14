@@ -5,6 +5,7 @@ This checks packaging and ad-hoc signing, not installing Spotify or running it o
 """
 import hashlib
 import json
+import itertools
 import os
 import plistlib
 import shutil
@@ -17,6 +18,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 KIT = os.environ.get("SG_OFFICIAL_KIT")
+ADDON = os.environ.get("SG_PERFORMANCE_DYLIB")
 APP = "Payload/Spotify.app/"
 
 
@@ -84,10 +86,13 @@ class OfficialPipelineTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             folder = Path(folder)
             host = {"CFBundleIdentifier": "com.spotify.client", "CFBundleExecutable": "Spotify",
-                    "CFBundleShortVersionString": "9.1.78", "CFBundleVersion": "91780000",
+                    "CFBundleShortVersionString": "9.1.90", "CFBundleVersion": "91900000",
                     "CFBundleName": "Spotify", "MinimumOSVersion": "16.1"}
-            for with_widget in (True, False):
-                with self.subTest(widget=with_widget):
+            modes = (False, True) if ADDON else (False,)
+            for version, with_widget, optimized in itertools.product(("9.1.90", "9.1.78"), (True, False), modes):
+                with self.subTest(version=version, widget=with_widget, optimized=optimized):
+                    host["CFBundleShortVersionString"] = version
+                    host["CFBundleVersion"] = "91900000" if version == "9.1.90" else "91780000"
                     source, output = folder / "decrypted fixture.ipa", folder / "result.ipa"
                     with zipfile.ZipFile(source, "w") as archive:
                         archive.writestr(APP + "Info.plist", plistlib.dumps(host))
@@ -100,7 +105,8 @@ class OfficialPipelineTests(unittest.TestCase):
                             write_executable(archive, widget + "WidgetExtension")
                     original = source.read_bytes()
                     result = subprocess.run([str(ROOT / "scripts/official-release.sh"), str(source), str(output)],
-                                            capture_output=True, text=True)
+                                            capture_output=True, text=True,
+                                            env={**os.environ, "SG_OPTIMIZE": str(int(optimized))})
                     self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
                     self.assertEqual(source.read_bytes(), original)
                     with zipfile.ZipFile(KIT) as kit, zipfile.ZipFile(output) as built:
@@ -110,6 +116,16 @@ class OfficialPipelineTests(unittest.TestCase):
                         self.assertTrue((built.getinfo(APP + "Spotify").external_attr >> 16) & 0o111)
                         for name in manifest["load"][0]["dylibs"]:
                             self.assertIn(name, loads)
+                        if optimized:
+                            addon_path = "@rpath/SGPerformance051.dylib"
+                            self.assertEqual(loads.count(addon_path), 1)
+                            self.assertLess(loads.index("@rpath/spotifyglass.dylib"), loads.index(addon_path))
+                            _, before, _ = inspect(Path(ADDON).read_bytes())
+                            member = APP + "Frameworks/SGPerformance051.dylib"
+                            _, after, signed = inspect(built.read(member))
+                            self.assertEqual(after, before)
+                            self.assertTrue(signed)
+                            self.assertTrue((built.getinfo(member).external_attr >> 16) & 0o111)
                         if with_widget:
                             loads, _, signed = inspect(built.read(widget + "WidgetExtension"))
                             self.assertTrue(signed)
@@ -129,7 +145,8 @@ class OfficialPipelineTests(unittest.TestCase):
                         self.assertFalse(info["UIDesignRequiresCompatibility"])
                         extension = plistlib.loads(built.read(APP + "PlugIns/SpotifyGlassLiveActivity.appex/Info.plist"))
                         self.assertEqual(extension["CFBundleIdentifier"], "com.spotify.client.liveactivity")
-                        self.assertEqual(extension["CFBundleVersion"], "91780000")
+                        self.assertEqual(extension["CFBundleVersion"], host["CFBundleVersion"])
+                        self.assertEqual(extension["CFBundleShortVersionString"], version)
                         actions = json.loads(built.read(APP + "Metadata.appintents/extract.actionsdata"))["actions"]
                         self.assertIn("ExistingIntent", actions)
                         self.assertEqual(len(actions), 1 + len(json.loads(kit.read("appintents/extract.actionsdata"))["actions"]))

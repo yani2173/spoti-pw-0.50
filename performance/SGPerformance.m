@@ -9,13 +9,15 @@
 #import <QuartzCore/QuartzCore.h>
 #endif
 
-// An add-on for the verified official 0.50.0 kit, not a replacement spotifyglass.dylib.
+// An add-on for the verified official 0.51.0 kit, not a replacement spotifyglass.dylib.
 // Its SGRKaraokeView.startLink passes self as the display link target (see README.md).
 // The run loop retains the link and the link retains its target; this proxy holds the view weakly.
 @interface SGPerfDisplayTarget : NSObject
 @property (nonatomic, weak) id target;
+@property (nonatomic, strong) id retainedTicker;
 @property (nonatomic, weak) CADisplayLink *link;
 @property (nonatomic) BOOL ownerPaused;
+@property (nonatomic) BOOL takesLink;
 - (void)tick:(CADisplayLink *)link;
 @end
 
@@ -37,13 +39,20 @@
 @end
 
 static BOOL sg_inactive;
+static BOOL sg_transitioning;
 static Class sg_lyricsClass;
+static Class sg_warpTickerClass;
+static Class sg_visualizerTickerClass;
 static NSHashTable<SGPerfDisplayTarget *> *sg_targets;
 static CADisplayLink *(*sg_factory)(id, SEL, id, SEL);
 static void (*sg_pause)(id, SEL, BOOL);
+static void (*sg_invalidate)(id, SEL);
 static char sg_proxyKey;
 static char sg_lifetimeKey;
 static atomic_uint_fast64_t sg_activityGeneration;
+static atomic_uint_fast64_t sg_transitionGeneration;
+
+static BOOL suspended(void) { return sg_inactive || sg_transitioning; }
 
 static void pauseTarget(SGPerfDisplayTarget *target) {
     CADisplayLink *link = target.link;
@@ -54,7 +63,7 @@ static void applyState(SGPerfDisplayTarget *proxy) {
     CADisplayLink *link = proxy.link;
     if (!link) return;
     if (!proxy.target) { [link invalidate]; return; }
-    BOOL paused = proxy.ownerPaused || sg_inactive;
+    BOOL paused = proxy.ownerPaused || suspended();
     if (link.isPaused != paused) sg_pause(link, @selector(setPaused:), paused);
 }
 
@@ -65,35 +74,47 @@ static void applyState(SGPerfDisplayTarget *proxy) {
         [link invalidate];
         return;
     }
-    if (sg_inactive) {
+    if (suspended()) {
         pauseTarget(self);
         return;
     }
-    ((void (*)(id, SEL))objc_msgSend)(target, @selector(tick));
+    if (self.takesLink) ((void (*)(id, SEL, id))objc_msgSend)(target, @selector(tick:), link);
+    else ((void (*)(id, SEL))objc_msgSend)(target, @selector(tick));
 }
 @end
 
 static CADisplayLink *displayLink(id cls, SEL cmd, id target, SEL selector) {
-    // Everything except this exact lyrics callback uses Apple's original factory unchanged.
-    if (!NSThread.isMainThread || ![target isKindOfClass:sg_lyricsClass] || selector != @selector(tick))
+    BOOL lyrics = [target isKindOfClass:sg_lyricsClass] && selector == @selector(tick);
+    Class clsOfTarget = object_getClass(target);
+    BOOL ticker = selector == @selector(tick:) &&
+        ((sg_warpTickerClass && clsOfTarget == sg_warpTickerClass) ||
+         (sg_visualizerTickerClass && clsOfTarget == sg_visualizerTickerClass));
+    // Only ABI-verified mod callbacks are wrapped. Spotify and other targets pass through.
+    if (!NSThread.isMainThread || (!lyrics && !ticker))
         return sg_factory(cls, cmd, target, selector);
     SGPerfDisplayTarget *proxy = [SGPerfDisplayTarget new];
     proxy.target = target;
+    proxy.takesLink = ticker;
+    // The GPU tickers already reference their owners weakly. Some are retained only by the link;
+    // preserve that ownership rather than introducing a weak target which immediately disappears.
+    if (ticker) proxy.retainedTicker = target;
     CADisplayLink *link = sg_factory(cls, cmd, proxy, @selector(tick:));
     if (!link) return nil;
     proxy.link = link;
     proxy.ownerPaused = link.isPaused;
     objc_setAssociatedObject(link, &sg_proxyKey, proxy, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    SGPerfViewLifetime *lifetime = objc_getAssociatedObject(target, &sg_lifetimeKey);
-    if (!lifetime) {
-        lifetime = [SGPerfViewLifetime new];
-        lifetime.links = [NSHashTable weakObjectsHashTable];
-        objc_setAssociatedObject(target, &sg_lifetimeKey, lifetime, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    if (lyrics) {
+        SGPerfViewLifetime *lifetime = objc_getAssociatedObject(target, &sg_lifetimeKey);
+        if (!lifetime) {
+            lifetime = [SGPerfViewLifetime new];
+            lifetime.links = [NSHashTable weakObjectsHashTable];
+            objc_setAssociatedObject(target, &sg_lifetimeKey, lifetime, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        }
+        [lifetime.links addObject:link];
     }
-    [lifetime.links addObject:link];
     [sg_targets addObject:proxy];
     // WillResignActive can arrive while UIApplication still reports Active. The notification wins.
-    if (sg_inactive || UIApplication.sharedApplication.applicationState != UIApplicationStateActive)
+    if (suspended() || UIApplication.sharedApplication.applicationState != UIApplicationStateActive)
         pauseTarget(proxy);
     return link;
 }
@@ -103,17 +124,61 @@ static void setPaused(id link, SEL cmd, BOOL paused) {
     if (proxy) {
         // Keep the owner's requested pause even if it changes while the app is inactive.
         proxy.ownerPaused = paused;
-        paused = paused || sg_inactive;
+        paused = paused || suspended();
     }
     sg_pause(link, cmd, paused);
 }
 
+static void invalidateLink(id link, SEL cmd) {
+    sg_invalidate(link, cmd);
+    // Release the retained ticker as Apple's invalidate releases the original target, even if its
+    // owner keeps the invalidated link object around. Also remove it from state sweeps immediately.
+    if (objc_getAssociatedObject(link, &sg_proxyKey))
+        objc_setAssociatedObject(link, &sg_proxyKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+}
+
 static void setActive(BOOL active) {
     sg_inactive = !active;
+    if (!active) {
+        sg_transitioning = NO;
+        atomic_fetch_add_explicit(&sg_transitionGeneration, 1, memory_order_relaxed);
+    }
     // A setter observer can create another link. Enumerate a snapshot so re-entrancy is safe.
     // Read the current state for each link. A setter observer can post another app notification;
     // the latest notification must win for the remainder of this snapshot too.
     for (SGPerfDisplayTarget *target in sg_targets.allObjects) applyState(target);
+}
+
+static void notificationTransition(BOOL transitioning) {
+    uint_fast64_t generation = atomic_fetch_add_explicit(&sg_transitionGeneration, 1, memory_order_relaxed) + 1;
+    void (^apply)(void) = ^{
+        if (atomic_load_explicit(&sg_transitionGeneration, memory_order_relaxed) != generation) return;
+        sg_transitioning = transitioning && !sg_inactive;
+        for (SGPerfDisplayTarget *target in sg_targets.allObjects) applyState(target);
+        if (sg_transitioning) {
+            // Normal completion comes from the player's transition coordinator, including a
+            // cancelled swipe. Recover if upstream never sends its end notification.
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 10 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
+                if (atomic_load_explicit(&sg_transitionGeneration, memory_order_relaxed) != generation) return;
+                sg_transitioning = NO;
+                for (SGPerfDisplayTarget *target in sg_targets.allObjects) applyState(target);
+            });
+        }
+    };
+    if (NSThread.isMainThread) apply();
+    else dispatch_async(dispatch_get_main_queue(), apply);
+}
+
+static Class tickerClass(NSString *name) {
+    Class cls = NSClassFromString(name);
+    Method method = class_getInstanceMethod(cls, @selector(tick:));
+    if (!method || method_getNumberOfArguments(method) != 3) return Nil;
+    char result[16] = {0}, argument[16] = {0};
+    if (method) {
+        method_getReturnType(method, result, sizeof(result));
+        method_getArgumentType(method, 2, argument, sizeof(argument));
+    }
+    return method && result[0] == 'v' && argument[0] == '@' && method_getNumberOfArguments(method) == 3 ? cls : Nil;
 }
 
 static void notificationActive(BOOL active) {
@@ -137,11 +202,15 @@ void SGInstallPerformance(void) {
         if (!tick || result[0] != 'v' || method_getNumberOfArguments(tick) != 2) return;
         Method factory = class_getClassMethod(CADisplayLink.class, @selector(displayLinkWithTarget:selector:));
         Method paused = class_getInstanceMethod(CADisplayLink.class, @selector(setPaused:));
-        if (!factory || !paused) return;
+        Method invalidated = class_getInstanceMethod(CADisplayLink.class, @selector(invalidate));
+        if (!factory || !paused || !invalidated) return;
+        sg_warpTickerClass = tickerClass(@"SGRWarpTicker");
+        sg_visualizerTickerClass = tickerClass(@"SGVisualizerTicker");
         sg_targets = [NSHashTable weakObjectsHashTable];
         sg_inactive = UIApplication.sharedApplication.applicationState != UIApplicationStateActive;
         sg_factory = (CADisplayLink *(*)(id, SEL, id, SEL))method_getImplementation(factory);
         sg_pause = (void (*)(id, SEL, BOOL))method_getImplementation(paused);
+        sg_invalidate = (void (*)(id, SEL))method_getImplementation(invalidated);
         NSNotificationCenter *center = NSNotificationCenter.defaultCenter;
         [center addObserverForName:UIApplicationWillResignActiveNotification object:nil
                             queue:nil usingBlock:^(NSNotification *note) {
@@ -153,9 +222,18 @@ void SGInstallPerformance(void) {
             (void)note;
             notificationActive(YES);
         }];
+        [center addObserverForName:@"spotifyglass.playerTransition" object:nil queue:nil usingBlock:^(NSNotification *note) {
+            (void)note;
+            notificationTransition(YES);
+        }];
+        [center addObserverForName:@"spotifyglass.playerTransitionEnded" object:nil queue:nil usingBlock:^(NSNotification *note) {
+            (void)note;
+            notificationTransition(NO);
+        }];
+        method_setImplementation(invalidated, (IMP)invalidateLink);
         method_setImplementation(paused, (IMP)setPaused);
         method_setImplementation(factory, (IMP)displayLink);
-        NSLog(@"[spoti-perf] 0.50.0 lyrics: weak display targets and inactive suspension installed");
+        NSLog(@"[spoti-perf] 0.51.0: lyrics lifecycle and player-transition suspension installed");
     });
 }
 

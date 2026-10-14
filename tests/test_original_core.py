@@ -22,21 +22,21 @@ class OriginalCoreTests(unittest.TestCase):
         self.ipa, self.kit = self.folder / "test.ipa", self.folder / "kit.zip"
         self.core = bytes(executable())
         with zipfile.ZipFile(self.kit, "w") as kit:
-            kit.writestr("kit.json", json.dumps({"version": "0.50.0"}))
+            kit.writestr("kit.json", json.dumps({"version": "0.51.0"}))
             kit.writestr("files/Frameworks/spotifyglass.dylib", self.core)
 
     def write_ipa(self, core=None, addon=False, loads=None):
         if loads is None:
             loads = ["@rpath/SpotifyGlassAppGroups.dylib", "@rpath/spotifyglass.dylib"]
             if addon:
-                loads.append("@rpath/SGPerformance050.dylib")
+                loads.append("@rpath/SGPerformance051.dylib")
         with zipfile.ZipFile(self.ipa, "w") as built:
             built.writestr("Payload/Spotify.app/Info.plist", plistlib.dumps({"CFBundleExecutable": "Spotify"}))
             built.writestr("Payload/Spotify.app/Spotify", executable([dylib_command(path) for path in loads]))
             built.writestr("Payload/Spotify.app/Frameworks/SpotifyGlassAppGroups.dylib", self.core)
             built.writestr("Payload/Spotify.app/Frameworks/spotifyglass.dylib", self.core if core is None else core)
             if addon:
-                built.writestr("Payload/Spotify.app/Frameworks/SGPerformance050.dylib", b"fixture addon")
+                built.writestr("Payload/Spotify.app/Frameworks/SGPerformance051.dylib", b"fixture addon")
 
     def test_original_sections_are_accepted(self):
         self.write_ipa()
@@ -68,7 +68,7 @@ class OriginalCoreTests(unittest.TestCase):
 
     def test_loading_addon_before_original_core_is_rejected(self):
         self.write_ipa(addon=True, loads=["@rpath/SpotifyGlassAppGroups.dylib",
-                                        "@rpath/SGPerformance050.dylib", "@rpath/spotifyglass.dylib"])
+                                        "@rpath/SGPerformance051.dylib", "@rpath/spotifyglass.dylib"])
         with self.assertRaisesRegex(ValueError, "must load after"):
             verifier.verify(self.ipa, self.kit, optimized=True)
 

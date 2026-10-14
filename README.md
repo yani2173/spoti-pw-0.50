@@ -8,7 +8,7 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/iOS-000000?style=for-the-badge&logo=ios&logoColor=white" alt="iOS">
-  <img src="https://img.shields.io/badge/Spotify-9.1.78-1ED760?style=for-the-badge&logo=spotify&logoColor=white" alt="Spotify 9.1.78">
+  <img src="https://img.shields.io/badge/Spotify-9.1.90-1ED760?style=for-the-badge&logo=spotify&logoColor=white" alt="Spotify 9.1.90">
   <img src="https://img.shields.io/badge/Objective--C-3A95E3?style=for-the-badge&logo=apple&logoColor=white" alt="Objective-C">
   <img src="https://img.shields.io/badge/GitHub_Actions-2671E5?style=for-the-badge&logo=githubactions&logoColor=white" alt="GitHub Actions">
   <img src="https://img.shields.io/badge/License-PolyForm_Strict_1.0.0-blue?style=for-the-badge" alt="PolyForm Strict 1.0.0">
@@ -33,8 +33,8 @@
 A no-jailbreak Theos tweak that rebuilds Spotify for iOS in Liquid Glass, injected into your own
 decrypted IPA and signed with your own certificate.
 
-Built and tested on **Spotify 9.1.78** — use that version's IPA. The mod hooks Spotify's own classes,
-which change between releases, so another version may build and then break.
+The official **0.51.0** kit supports **Spotify 9.1.90 and 9.1.78**. Use a clean decrypted IPA of
+one of these versions; other releases have different classes and are rejected by the builder.
 
 | | |
 |---|---|
@@ -48,7 +48,7 @@ in Settings → Mod Settings.
 
 ## Build it
 
-No IPA is distributed. Bring a decrypted **Spotify 9.1.78** IPA; you get an unsigned
+No IPA is distributed. Bring a decrypted **Spotify 9.1.90 or 9.1.78** IPA; you get an unsigned
 `spoti.pw-<mod version>.ipa` to sign with SideStore, Feather or any certificate signer. Each
 [release](https://github.com/skopevoj/spoti.pw/releases) also carries the tweak's `.deb`.
 
@@ -58,32 +58,34 @@ Fork the repo, enable Actions, run **Build IPA from your own Spotify IPA**. It t
 your decrypted `.ipa` and hands the built IPA back as a workflow artifact. No Mac needed; the link is
 masked in the log and the result stays in your fork.
 
-This repository retains the original public `v0.50.0` tag and its official compiled release files
-under `vendor/releases/0.50.0/`. The public source at that tag identifies itself as **0.22.0**;
-the IPA workflow uses the actual compiled **0.50.0** kit, rather than rebuilding that older source.
+This repository retains the original public `v0.51.0` tag and its official compiled release files
+under `vendor/releases/0.51.0/`. The public source at that tag identifies itself as **0.22.0**;
+the IPA workflow uses the actual compiled **0.51.0** kit, rather than rebuilding that older source.
 
 The workflow offers two modes:
 
-- **optimized-0.50.0** (default): original 0.50.0 plus an independent performance add-on. It breaks
+- **optimized-0.51.0** (default): original 0.51.0 plus an independent performance add-on. It breaks
   the lyrics view/display-link retention cycle and suspends lyrics animation while the app is inactive,
   including late-created links and background launches. Links are cleaned up when their view is released,
-  even while paused. Original callbacks, owner pause requests, and 80–120 Hz settings are preserved.
-- **official-0.50.0**: the unmodified official build, for comparison.
+  even while paused. During player opening/closing transitions, lyrics, moving-background and visualizer
+  display links are suspended until completion. Original owner pauses, callback arguments and normal
+  frame-rate settings are preserved.
+- **official-0.51.0**: the unmodified official build, for comparison.
 
 Both modes verify the official kit's published SHA-256 and compare the final core's Mach-O code/data
-sections to that kit after signing. The optimized output is `spoti.pw-0.50.0-optimized.ipa`.
+sections to that kit after signing. The optimized output is `spoti.pw-0.51.0-optimized.ipa`.
 The builder rejects encrypted main executables and verifies that the app loads every required mod dylib.
 Download **spoti.ipa** from the workflow's Artifacts, unzip it, then sign/install the enclosed IPA.
-Use a clean decrypted Spotify 9.1.78 IPA with no existing spoti.pw injection.
+Use a clean decrypted Spotify 9.1.90 or 9.1.78 IPA with no existing spoti.pw injection.
 
 The add-on is described in [performance/README.md](performance/README.md), including the ABI evidence
-from the real 0.50.0 binary. This is a lifecycle optimization; device frame pacing, memory, and battery
-use still need testing on an iPhone. It does not refactor the unavailable 0.50.0 source or hide its version.
+from the real 0.51.0 binary. These are lifecycle and transition-workload optimizations; device frame pacing, memory, and battery
+use still need testing on an iPhone. It does not refactor the unavailable 0.51.0 source or hide its version.
 
 Local commands:
 
-    make release-optimized IPA="/path/to/decrypted Spotify 9.1.78.ipa"  # Xcode + Python 3.11+, cyan, ldid, unzip, zip
-    make release-official IPA="/path/to/decrypted Spotify 9.1.78.ipa"   # same tools without an Xcode compilation
+    make release-optimized IPA="/path/to/decrypted Spotify 9.1.90.ipa"  # Xcode + Python 3.11+, cyan, ldid, unzip, zip
+    make release-official IPA="/path/to/decrypted Spotify 9.1.90.ipa"   # same tools without an Xcode compilation
 
 `make release` below still builds the older public source. For packaging tests run
 `python3 -m unittest discover -s tests -v`; set `SG_OFFICIAL_KIT` and put cyan/ldid on PATH for the

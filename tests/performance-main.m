@@ -1,6 +1,7 @@
 #import "PerformanceUIKitStubs.h"
 #import "../performance/SGPerformance.h"
 #import <objc/message.h>
+#import <objc/runtime.h>
 
 static void require(BOOL condition, const char *message);
 static BOOL nilFactory;
@@ -57,6 +58,18 @@ NSNotificationName const UIApplicationDidBecomeActiveNotification = @"UIApplicat
 @implementation OtherTarget
 - (void)tick {}
 @end
+@interface SGRWarpTicker : NSObject
+@property (nonatomic) NSInteger calls;
+@property (nonatomic, weak) CADisplayLink *lastLink;
+- (void)tick:(CADisplayLink *)link;
+@end
+@implementation SGRWarpTicker
+- (void)tick:(CADisplayLink *)link { self.calls++; self.lastLink = link; }
+@end
+@interface SGVisualizerTicker : SGRWarpTicker
+@end
+@implementation SGVisualizerTicker
+@end
 static void require(BOOL condition, const char *message) {
     if (!condition) { fprintf(stderr, "FAIL: %s\n", message); exit(1); }
 }
@@ -65,6 +78,16 @@ static void notify(NSNotificationName name) {
 }
 int main(int argc, const char *argv[]) {
     @autoreleasepool {
+        if (argc > 1 && strcmp(argv[1], "unsupported-ticker") == 0) {
+            Method tick = class_getInstanceMethod(SGVisualizerTicker.class, @selector(tick:));
+            class_addMethod(SGVisualizerTicker.class, @selector(tick:), method_getImplementation(tick), "v24@0:8d16");
+            SGInstallPerformance();
+            SGVisualizerTicker *ticker = [SGVisualizerTicker new];
+            CADisplayLink *link = [CADisplayLink displayLinkWithTarget:ticker selector:@selector(tick:)];
+            require(link.target == ticker, "a ticker with an unsupported ABI is left untouched");
+            puts("PASS: unsupported ticker signature guard");
+            return 0;
+        }
         if (argc > 1) {
             UIApplication.sharedApplication.applicationState = strcmp(argv[1], "background") == 0
                 ? UIApplicationStateBackground : UIApplicationStateInactive;
@@ -74,9 +97,14 @@ int main(int argc, const char *argv[]) {
             require(link.isPaused, "installation while inactive immediately suspends new links");
             link.paused = NO;
             require(link.isPaused, "owner resume cannot bypass an initially inactive app");
+            SGRWarpTicker *ticker = [SGRWarpTicker new];
+            CADisplayLink *gpu = [CADisplayLink displayLinkWithTarget:ticker selector:@selector(tick:)];
+            gpu.paused = NO;
+            require(gpu.isPaused, "initial inactive suspension also applies to GPU links");
             UIApplication.sharedApplication.applicationState = UIApplicationStateActive;
             notify(UIApplicationDidBecomeActiveNotification);
             require(!link.isPaused, "the initially inactive link resumes on activation");
+            require(!gpu.isPaused, "initially inactive GPU links resume on activation");
             puts("PASS: initially inactive installation");
             return 0;
         }
@@ -196,7 +224,61 @@ int main(int argc, const char *argv[]) {
         require([CADisplayLink displayLinkWithTarget:reentrant selector:@selector(tick)] == nil,
                 "a failed original factory remains nil");
         nilFactory = NO;
-        puts("PASS: ownership, immediate cleanup, off-main release, inactive suspension, nested notifications, callbacks and frame rates");
+        SGRWarpTicker *warp = [SGRWarpTicker new];
+        SGVisualizerTicker *visualizer = [SGVisualizerTicker new];
+        CADisplayLink *warpLink = [CADisplayLink displayLinkWithTarget:warp selector:@selector(tick:)];
+        CADisplayLink *visualizerLink = [CADisplayLink displayLinkWithTarget:visualizer selector:@selector(tick:)];
+        warpLink.preferredFramesPerSecond = 120;
+        [warpLink fire];
+        [visualizerLink fire];
+        require(warp.calls == 1 && warp.lastLink == warpLink && visualizer.calls == 1,
+                "GPU callbacks receive the original link exactly once");
+        notify(@"spotifyglass.playerTransition");
+        require(warpLink.isPaused && visualizerLink.isPaused && reentrant.link.isPaused,
+                "GPU and lyrics links suspend during player transitions");
+        [warpLink fire];
+        require(warp.calls == 1, "GPU work cannot run during a transition");
+        warpLink.paused = NO;
+        require(warpLink.isPaused, "an owner resume cannot bypass transition suspension");
+        visualizerLink.paused = YES;
+        CADisplayLink *lateGpu = [CADisplayLink displayLinkWithTarget:warp selector:@selector(tick:)];
+        require(lateGpu.isPaused, "a GPU link created mid-transition is suspended");
+        notify(@"spotifyglass.playerTransitionEnded");
+        require(!warpLink.isPaused && !lateGpu.isPaused && !reentrant.link.isPaused,
+                "links resume at transition completion, including a cancelled swipe");
+        require(visualizerLink.isPaused, "GPU owner pauses survive the transition");
+        require(warpLink.preferredFramesPerSecond == 120, "normal GPU frame rates are preserved");
+        [warpLink fire];
+        require(warp.calls == 2 && warp.lastLink == warpLink, "GPU rendering resumes with the original link");
+        notify(@"spotifyglass.playerTransition");
+        notify(UIApplicationWillResignActiveNotification);
+        notify(@"spotifyglass.playerTransitionEnded");
+        require(warpLink.isPaused, "transition completion cannot resume rendering while inactive");
+        notify(UIApplicationDidBecomeActiveNotification);
+        require(!warpLink.isPaused, "returning to the app recovers interrupted transitions");
+        dispatch_sync(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+            notify(@"spotifyglass.playerTransition");
+        });
+        notify(@"spotifyglass.playerTransitionEnded");
+        drainedNotifications = NO;
+        dispatch_async(dispatch_get_main_queue(), ^{ drainedNotifications = YES; });
+        notificationDeadline = [NSDate dateWithTimeIntervalSinceNow:1];
+        while (!drainedNotifications && notificationDeadline.timeIntervalSinceNow > 0)
+            [NSRunLoop.currentRunLoop runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.01]];
+        require(drainedNotifications && !warpLink.isPaused, "stale queued transition starts cannot pause completed transitions");
+        __weak SGRWarpTicker *retainedOnlyByLink;
+        CADisplayLink *transientLink;
+        @autoreleasepool {
+            SGRWarpTicker *transientTicker = [SGRWarpTicker new];
+            retainedOnlyByLink = transientTicker;
+            transientLink = [CADisplayLink displayLinkWithTarget:transientTicker selector:@selector(tick:)];
+        }
+        require(retainedOnlyByLink != nil, "the original link-owned GPU ticker stays alive");
+        [transientLink fire];
+        require(retainedOnlyByLink.calls == 1, "a link-owned ticker still receives callbacks");
+        [transientLink invalidate];
+        require(retainedOnlyByLink == nil, "invalidate releases the ticker while the link object is retained");
+        puts("PASS: lifecycle, inactive suspension, transition suspension, GPU ownership and callbacks, original frame rates");
     }
     return 0;
 }
