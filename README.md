@@ -30,8 +30,8 @@
   <img src="docs/screenshots/home.webp" width="16%" alt="Home">
 </p>
 
-A no-jailbreak Theos tweak that rebuilds Spotify for iOS in Liquid Glass, injected into your own
-decrypted IPA and signed with your own certificate.
+This fork packages the original spoti.pw 0.51.0 release with an independent performance add-on,
+injected into your own decrypted Spotify IPA and signed with your own certificate.
 
 The official **0.51.0** kit supports **Spotify 9.1.90 and 9.1.78**. Use a clean decrypted IPA of
 one of these versions; other releases have different classes and are rejected by the builder.
@@ -59,8 +59,9 @@ your decrypted `.ipa` and hands the built IPA back as a workflow artifact. No Ma
 masked in the log and the result stays in your fork.
 
 This repository retains the original public `v0.51.0` tag and its official compiled release files
-under `vendor/releases/0.51.0/`. The public source at that tag identifies itself as **0.22.0**;
-the IPA workflow uses the actual compiled **0.51.0** kit, rather than rebuilding that older source.
+under `vendor/releases/0.51.0/`. The older public source has been removed from the working tree. Historical upstream tags remain
+unchanged for provenance. The current build uses the actual compiled **0.51.0** kit; the editable
+app code in this checkout is our independent add-on under `performance/`.
 
 The workflow offers two modes:
 
@@ -97,28 +98,24 @@ Local commands:
     make release-optimized IPA="/path/to/decrypted Spotify 9.1.90.ipa"  # Xcode + Python 3.11+, cyan, ldid, unzip, zip
     make release-official IPA="/path/to/decrypted Spotify 9.1.90.ipa"   # same tools without an Xcode compilation
 
-`make release` below still builds the older public source. For packaging tests run
-`python3 -m unittest discover -s tests -v`; set `SG_OFFICIAL_KIT` and put cyan/ldid on PATH for the
-real-kit test with synthetic executables. CI also runs the add-on's Objective-C tests on macOS
-and compiles its iOS dylib.
-
 ### Build on a Mac
 
-Theos in `~/theos` and Xcode with an iPhoneOS 26+ SDK (`xcode-select` it). An SDK in `~/theos/sdks`
-alone builds too, but without the Live Activity. Then:
+Install Xcode, Python 3.11+, `ldid` and the pinned packaging tool:
 
-    brew install make ldid dpkg zsign ideviceinstaller libimobiledevice
-    uv tool install "cyan @ git+https://github.com/asdfzxcvbn/pyzule-rw"
+    brew install ldid
+    python3 -m pip install "git+https://github.com/asdfzxcvbn/pyzule-rw.git@740d3716dcd98c20c000f12cdb88f1f0b2a533a4"
 
-Put the decrypted `.ipa` in `ipa/`, then:
+Put a clean supported Spotify IPA in `ipa/`, then run `make release`. Both `make build` and
+`make release` package **optimized 0.51.0**. `make release-official` packages the original release.
+Theos is not required. No source for the upstream 0.51.0 core is included.
 
-    make release    # out/spoti.pw-<version>.ipa, ready to sign
-    make install    # the same, signed with your certificate and pushed over USB
+For optional USB installation, `make install` builds the optimized IPA and signs it using
+`.signing.env`; copy `.signing.env.example` and fill in your certificate details. This also needs
+`zsign` and `ideviceinstaller`. FlareStore users can instead sign the workflow's IPA on their phone
+with the same working Bundle ID.
 
-`make install` reads `SIGN_P12`, `SIGN_PROFILE` and `SIGN_P12_PASSWORD` from `.signing.env`; copy
-`.signing.env.example` and fill it in.
-
-The first build spends a minute reading Spotify's flags out of your IPA. `make flags` regenerates it.
+Run `make test` for packaging regression tests. CI also tests the actual add-on with UIKit stand-ins,
+compiles its arm64 iOS dylib, and packages both supported Spotify versions with the official kit.
 
 ### Signing
 
@@ -127,7 +124,7 @@ but tapping the player on the lock screen won't open it — and it tells you on 
 to use. In Feather, copy the App ID into **Identifier** and leave **PPQ protection** off; AltStore,
 SideStore and Sideloadly get this right on their own.
 
-The app keeps Spotify's bundle id, so it installs over the real Spotify.
+Whether the signed app replaces an existing installation depends on the Bundle ID used by your signer.
 
 ## Support
 
@@ -154,9 +151,8 @@ contribution; it is ticked once, before the first pull request is merged.
 
 ## Credits
 
-[cyan](https://github.com/asdfzxcvbn/pyzule-rw) injects, [Theos](https://theos.dev) builds, and
-[FLEX](https://github.com/FLEXTool/FLEX), as hopeless's AutoFLEX build in `vendor/`, is the inspector
-the view trees are read through.
+[spoti.pw](https://github.com/skopevoj/spoti.pw/releases/tag/v0.51.0) supplies the original release.
+[cyan](https://github.com/asdfzxcvbn/pyzule-rw) injects the binaries, and Xcode builds our add-on.
 
 ## License
 

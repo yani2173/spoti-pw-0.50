@@ -1,33 +1,16 @@
-# Entry points; the real work is in scripts/. IPA defaults to the first file in ipa/.
+# Package the pinned official 0.51.0 kit. The only compiled source is our add-on.
 IPA ?= $(firstword $(wildcard ipa/*.ipa))
+.DEFAULT_GOAL := release-optimized
 
-# What goes on the phone is the mod alone. FLEX is the inspector `make trees` reads the screens
-# through, so it rides along only when it is asked for: make install FLEX=1. (A make target cannot
-# take --flex; make would read that as an option of its own.)
-FLEX ?= 0
-FLEX_ARG := $(if $(filter 0,$(FLEX)),--no-flex,)
-
-# A local install is renamed and re-iconed so it is told apart from the released app on the home
-# screen.
-DEV_NAME ?= spoti.dev
-DEV_ICON ?= docs/icon.png
-
-.PHONY: build release release-official release-optimized install trees session log flags
-build:    ## FLEX + glass IPA into out/
-	./scripts/pipeline.sh $(IPA)
-release:  ## glass only, no FLEX
-	./scripts/pipeline.sh $(IPA) --no-flex
-release-official:  ## official 0.51.0 prebuilt kit, no source compilation
+.PHONY: build release release-official release-optimized install log test
+build release: release-optimized
+release-official:
 	./scripts/official-release.sh "$(IPA)"
-release-optimized:  ## original 0.51.0 plus the independent performance add-on
+release-optimized:
 	SG_OPTIMIZE=1 ./scripts/official-release.sh "$(IPA)"
-install:  ## build, sign with your certificate, push to the phone on USB (FLEX=1 to take FLEX too)
-	./scripts/pipeline.sh $(IPA) --install $(FLEX_ARG) --name "$(DEV_NAME)" --icon "$(DEV_ICON)" -o out/spoti.dev.ipa
-trees:    ## record per-screen view trees into trees/ (needs a FLEX build on the phone)
-	./scripts/record-trees.py
-session:  ## record clean trees screen by screen into trees/clean/, Enter per snapshot, n for the next screen (SCREENS="playlist artist" for some)
-	./scripts/record-session.py $(SCREENS)
-log:     ## stream the tweak's log lines from the phone
+install: release-optimized
+	./scripts/install.sh out/spoti.pw-0.51.0-optimized.ipa
+log:
 	./scripts/dump-log.sh
-flags:    ## regenerate tweak/Sources/Shared/Flags/SGFlagList.m, Spotify's remote-config flags, from the IPA
-	./scripts/extract-flags.py $(IPA)
+test:
+	python3 -m unittest discover -s tests -v
