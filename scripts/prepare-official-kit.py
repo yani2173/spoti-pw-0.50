@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify and prepare the official 0.50.0 kit for injection into a Spotify 9.1.78 IPA."""
+"""Verify and prepare the official 0.51.0 kit for injection into a Spotify 9.1.90 IPA."""
 import argparse
 import hashlib
 import json
@@ -11,15 +11,15 @@ from pathlib import Path, PurePosixPath
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from sg_macho import validate_decrypted_executable
 
-VERSION = "0.50.0"
-KIT_SHA256 = "da81a22bbdb4a27a060bead23eb3ff0aa90a06e4f22cd44927f7f9bff161839f"
+VERSION = "0.51.0"
+KIT_SHA256 = "21587c2b9433e3482c8c0ca6c6e4c7325a4b2c76d69bed607dfb031791231bd8"
 
 
 def verify_download(path, expected=KIT_SHA256):
     with open(path, "rb") as stream:
         digest = hashlib.file_digest(stream, "sha256").hexdigest()
     if digest != expected:
-        raise ValueError("Official kit checksum does not match the published 0.50.0 release")
+        raise ValueError("Official kit checksum does not match the published 0.51.0 release")
 
 
 def read_host(ipa):
@@ -35,7 +35,7 @@ def read_host(ipa):
         if not isinstance(executable, str) or not executable or "/" in executable or executable in (".", "..") or app + executable not in archive.namelist():
             raise ValueError("IPA has no valid main executable")
         validate_decrypted_executable(archive.read(app + executable))
-        for dylib in ("spotifyglass.dylib", "SpotifyGlassAppGroups.dylib", "SGPerformance050.dylib"):
+        for dylib in ("spotifyglass.dylib", "SpotifyGlassAppGroups.dylib", "SGPerformance050.dylib", "SGPerformance051.dylib"):
             if app + "Frameworks/" + dylib in archive.namelist():
                 raise ValueError("Use a clean decrypted Spotify IPA, without an existing spoti.pw injection")
         return app, info
@@ -59,9 +59,10 @@ def prepare(ipa, kit, destination):
     with zipfile.ZipFile(kit) as archive:
         manifest = json.loads(archive.read("kit.json"))
         if manifest.get("format") != 1 or manifest.get("version") != VERSION:
-            raise ValueError("Expected official kit format 1, version 0.50.0")
-        if info.get("CFBundleShortVersionString") != manifest["spotify"]:
-            raise ValueError(f"This release requires Spotify {manifest['spotify']}; IPA has {info.get('CFBundleShortVersionString', 'unknown')}")
+            raise ValueError("Expected official kit format 1, version 0.51.0")
+        supported = manifest.get("spotifyVersions", [manifest["spotify"]])
+        if info.get("CFBundleShortVersionString") not in supported:
+            raise ValueError(f"This release requires Spotify {' or '.join(supported)}; IPA has {info.get('CFBundleShortVersionString', 'unknown')}")
         for key in ("CFBundleIdentifier", "CFBundleVersion", "CFBundleShortVersionString"):
             if not isinstance(info.get(key), str) or not info[key]:
                 raise ValueError(f"IPA is missing {key}")

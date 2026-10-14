@@ -1,45 +1,63 @@
-# Performance add-on for the actual 0.50.0 release
+# Performance add-on for the actual 0.51.0 release
 
 The build uses the original official kit, verified by the published SHA-256:
-`da81a22bbdb4a27a060bead23eb3ff0aa90a06e4f22cd44927f7f9bff161839f`.
-`SGPerformance050.dylib` is injected alongside it. The build compares every Mach-O code/data section
-of the final `spotifyglass.dylib` with the original kit after signing; a difference fails the build.
-This preserves the original 0.50.0 core, rather than labelling the public 0.22.0 source as 0.50.0.
+`21587c2b9433e3482c8c0ca6c6e4c7325a4b2c76d69bed607dfb031791231bd8`.
+`SGPerformance051.dylib` is injected alongside it. After signing, the builder compares every
+Mach-O code/data section of `spotifyglass.dylib` with the original kit and fails on a difference.
+The kit supports Spotify 9.1.90 and 9.1.78. Its tag still points to public source version 0.22.0;
+the builder uses the actual compiled 0.51.0 release instead of relabelling the older source.
 
-The add-on only wraps `SGRKaraokeView`'s `tick` display links. A weak target breaks the view/link
-retention cycle. WillResignActive pauses these links immediately and keeps a newly created link
-paused during the interval in which UIApplication still reports Active. DidBecomeActive restores
-the pause state requested by the owner, including requests made while inactive. Other display link
-targets, callbacks, timestamps, and the original 80–120 Hz range are kept as they are.
+## Preserved lifecycle fixes
 
-The view also owns a lifetime sentinel with weak link references. When the view is released,
-all its links are invalidated on the main thread, including owner-paused links that would never
-get another cleanup tick. Installation reads the initial application state, so background launches
-cannot start a link by requesting an owner resume. Nested notifications use the latest state, and
-generation checks discard older off-main notifications queued before a newer main-thread event.
-State sweeps avoid calling the original pause setter when the effective value is unchanged.
+The add-on wraps `SGRKaraokeView`'s zero-argument `tick` display links with weak view targets.
+A view-owned sentinel holds links weakly and invalidates them on the main thread when the view
+is released, including paused links which would never get another cleanup tick. Inactive apps
+suspend managed links immediately; background launches and late-created links are also covered.
+Owner pause requests are preserved. State sweeps skip unchanged setters, handle nested
+notifications, and discard older off-main notifications queued before newer main-thread events.
 
-IPA preparation checks the main executable's Mach-O encryption commands in every arm64 slice
-(including universal files) before injection. The final check also requires load commands for both
-original dylibs and, in optimized mode, the add-on after the core. Merely copying an add-on into
-Frameworks without loading it fails the build. These checks do not decrypt an IPA.
+## Player transitions
 
-The class, callback, and argument passing were verified against the actual release binary:
+The add-on also wraps the verified `SGRWarpTicker` and `SGVisualizerTicker` `tick:` callbacks.
+These tickers already have weak layer/view owners; their original strong link-target ownership
+is retained, and `invalidate` releases the proxy's ticker even if the link itself stays alive.
+The original link, timestamps, and callback arguments are forwarded unchanged.
 
-- `SGRKaraokeView.startLink` at `0x8be6c`, signature `v16@0:8`.
-- `0x8be80`: `mov x19, x0` saves the view (`self`).
-- `0x8beec`: `mov x2, x19` passes that view as the factory's target.
-- The factory stub at `0x1d0800` resolves to `displayLinkWithTarget:selector:`.
-- The callback selector reference at `0x3872e0` resolves to `tick`.
-- `0x8befc` stores the returned link in the view's `_link` ivar.
+The mod's existing `spotifyglass.playerTransition` and `spotifyglass.playerTransitionEnded`
+notifications suspend lyrics, moving-background and visualizer links until the player's transition
+coordinator completes, including cancelled swipes. This avoids their per-frame work competing
+with the player's animation. Links created or resumed by their owners mid-transition stay paused.
+An end event cannot resume an inactive app or a link paused by its owner. Normal frame rates are
+unchanged; there is no app-wide FPS cap or feature/access change.
 
-Runtime installation checks the class and zero-argument void callback before installing, and does
-nothing when the expected ABI is absent. Its scope is the lyrics display-link lifecycle;
-refactoring the unavailable newer source still requires that source.
+The suspension follows completion rather than the nominal animation duration: an interactive
+drag can outlast that duration. A ten-second generation-checked recovery protects against a missing
+end event, and app deactivation clears an interrupted transition. Other display-link targets pass
+through Apple's original implementation. Runtime signature guards skip unsupported GPU tickers.
 
-The macOS test builds the actual implementation against UIKit stand-ins to check ownership,
-callbacks, background suspension, late links, resuming, preserving owner pauses, other targets,
-and frame rates. It also checks initially inactive/background launches, nested and queued
-notifications, immediate cleanup of paused links, and off-main view release. CI compiles the iOS dylib.
-Device frame pacing, memory, and battery use still
-need testing on a real decrypted Spotify 9.1.78 IPA and an iPhone; no measured speedup is claimed.
+## Verified ABI in the original 0.51.0 binary
+
+- `SGRKaraokeView.startLink`: `0xca5c8`; `0xca648` passes self as factory target; callback
+  selector reference `0x5094a0` resolves to `tick`; `0xca658` stores the link in `_link`.
+- `SGRWarpLayer.updateLink`: `0xb1650`; it creates a transient `SGRWarpTicker`, gives it a weak
+  layer, then `0xb16ac` passes it as target. The link is its only persistent strong owner.
+- `SGVisualizerView.updateLink`: `0x2ed0e0`; `0x2ed2d0` loads its ticker into the target argument.
+- Factory stub `0x3181e0` uses selector reference `0x5049c8`, which resolves to
+  `displayLinkWithTarget:selector:`. GPU callback reference `0x5094a8` resolves to `tick:`.
+- `SGRWarpTicker.tick:` (`0xb0474`) and `SGVisualizerTicker.tick:` (`0x2ec694`) have signature
+  `v24@0:8@16`. Their owner properties have the `W` (weak) attribute in the binary's metadata.
+- Both transition notification strings exist in the original release.
+
+## Packaging and validation
+
+IPA preparation checks the main executable's encryption commands in every arm64 slice, including
+universal files. Final verification requires the original dylibs and the add-on to be loaded, with
+the add-on after the original core. A copied but unloaded add-on fails verification. Existing
+0.50.0/0.51.0 performance injections are rejected; these checks do not decrypt an IPA.
+
+The macOS tests compile the actual implementation against UIKit stand-ins and cover weak view
+ownership, paused-link cleanup, off-main release, inactive/background launches, nested and queued
+notifications, owner pauses, transition suspension, late GPU links, callback forwarding, GPU ticker
+ownership, invalidation, unsupported signatures, and preserved frame rates. CI compiles the arm64
+iOS dylib. Real-kit packaging is tested with synthetic executables. Actual Spotify frame pacing,
+memory and battery use still require testing on an iPhone; no measured device speedup is claimed.

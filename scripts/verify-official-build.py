@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify that the built IPA retains the official 0.50.0 code and data sections."""
+"""Verify that the built IPA retains the official 0.51.0 code and data sections."""
 import importlib.util
 import json
 import plistlib
@@ -52,9 +52,9 @@ def verify(ipa, kit, optimized=False):
         if len(roots) != 1:
             raise ValueError("Built IPA must contain one main app")
         core = "Frameworks/spotifyglass.dylib"
-        if manifest["version"] != "0.50.0" or sections(built.read(roots[0] + core)) != sections(official.read("files/" + core)):
-            raise ValueError("The built IPA does not preserve the official 0.50.0 code/data")
-        if optimized and roots[0] + "Frameworks/SGPerformance050.dylib" not in built.namelist():
+        if manifest["version"] != "0.51.0" or sections(built.read(roots[0] + core)) != sections(official.read("files/" + core)):
+            raise ValueError("The built IPA does not preserve the official 0.51.0 code/data")
+        if optimized and roots[0] + "Frameworks/SGPerformance051.dylib" not in built.namelist():
             raise ValueError("Optimized build is missing its performance add-on")
         info = plistlib.loads(built.read(roots[0] + "Info.plist"))
         executable = info.get("CFBundleExecutable", "")
@@ -64,7 +64,7 @@ def verify(ipa, kit, optimized=False):
         validate_decrypted_executable(main)
         required = ["@rpath/SpotifyGlassAppGroups.dylib", "@rpath/spotifyglass.dylib"]
         if optimized:
-            required.append("@rpath/SGPerformance050.dylib")
+            required.append("@rpath/SGPerformance051.dylib")
         for path in required:
             if roots[0] + "Frameworks/" + path.removeprefix("@rpath/") not in built.namelist():
                 raise ValueError(f"Built IPA is missing {path}")
@@ -72,7 +72,7 @@ def verify(ipa, kit, optimized=False):
             if any(path not in loads for path in required):
                 raise ValueError("Built IPA does not load all required mod dylibs")
             if optimized and loads.index(required[1]) >= loads.index(required[2]):
-                raise ValueError("Performance add-on must load after the original 0.50.0 core")
+                raise ValueError("Performance add-on must load after the original 0.51.0 core")
 
 
 if __name__ == "__main__":
@@ -82,6 +82,6 @@ if __name__ == "__main__":
         spec.loader.exec_module(kit_module)
         kit_module.verify_download(sys.argv[2])
         verify(sys.argv[1], sys.argv[2], len(sys.argv) > 3 and sys.argv[3] == "1")
-        print("Verified: original 0.50.0 code/data sections preserved")
+        print("Verified: original 0.51.0 code/data sections preserved")
     except (OSError, ValueError, KeyError, struct.error, zipfile.BadZipFile) as error:
         sys.exit(str(error))
