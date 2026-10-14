@@ -58,6 +58,36 @@ Fork the repo, enable Actions, run **Build IPA from your own Spotify IPA**. It t
 your decrypted `.ipa` and hands the built IPA back as a workflow artifact. No Mac needed; the link is
 masked in the log and the result stays in your fork.
 
+This repository retains the original public `v0.50.0` tag and its official compiled release files
+under `vendor/releases/0.50.0/`. The public source at that tag identifies itself as **0.22.0**;
+the IPA workflow uses the actual compiled **0.50.0** kit, rather than rebuilding that older source.
+
+The workflow offers two modes:
+
+- **optimized-0.50.0** (default): original 0.50.0 plus an independent performance add-on. It breaks
+  the lyrics view/display-link retention cycle and suspends lyrics animation while the app is inactive,
+  including late-created links. Original callbacks, owner pause requests, and 80–120 Hz settings are preserved.
+- **official-0.50.0**: the unmodified official build, for comparison.
+
+Both modes verify the official kit's published SHA-256 and compare the final core's Mach-O code/data
+sections to that kit after signing. The optimized output is `spoti.pw-0.50.0-optimized.ipa`.
+Download **spoti.ipa** from the workflow's Artifacts, unzip it, then sign/install the enclosed IPA.
+Use a clean decrypted Spotify 9.1.78 IPA with no existing spoti.pw injection.
+
+The add-on is described in [performance/README.md](performance/README.md), including the ABI evidence
+from the real 0.50.0 binary. This is a lifecycle optimization; device frame pacing, memory, and battery
+use still need testing on an iPhone. It does not refactor the unavailable 0.50.0 source or hide its version.
+
+Local commands:
+
+    make release-optimized IPA="/path/to/decrypted Spotify 9.1.78.ipa"  # Xcode + Python 3.11+, cyan, ldid, unzip, zip
+    make release-official IPA="/path/to/decrypted Spotify 9.1.78.ipa"   # same tools without an Xcode compilation
+
+`make release` below still builds the older public source. For packaging tests run
+`python3 -m unittest discover -s tests -v`; set `SG_OFFICIAL_KIT` and put cyan/ldid on PATH for the
+real-kit test with synthetic executables. CI also runs the add-on's Objective-C tests on macOS
+and compiles its iOS dylib.
+
 ### Build on a Mac
 
 Theos in `~/theos` and Xcode with an iPhoneOS 26+ SDK (`xcode-select` it). An SDK in `~/theos/sdks`

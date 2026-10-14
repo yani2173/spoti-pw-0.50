@@ -12,11 +12,15 @@ FLEX_ARG := $(if $(filter 0,$(FLEX)),--no-flex,)
 DEV_NAME ?= spoti.dev
 DEV_ICON ?= docs/icon.png
 
-.PHONY: build release install trees session log flags
+.PHONY: build release release-official release-optimized install trees session log flags
 build:    ## FLEX + glass IPA into out/
 	./scripts/pipeline.sh $(IPA)
 release:  ## glass only, no FLEX
 	./scripts/pipeline.sh $(IPA) --no-flex
+release-official:  ## official 0.50.0 prebuilt kit, no source compilation
+	./scripts/official-release.sh "$(IPA)"
+release-optimized:  ## original 0.50.0 plus the independent performance add-on
+	SG_OPTIMIZE=1 ./scripts/official-release.sh "$(IPA)"
 install:  ## build, sign with your certificate, push to the phone on USB (FLEX=1 to take FLEX too)
 	./scripts/pipeline.sh $(IPA) --install $(FLEX_ARG) --name "$(DEV_NAME)" --icon "$(DEV_ICON)" -o out/spoti.dev.ipa
 trees:    ## record per-screen view trees into trees/ (needs a FLEX build on the phone)

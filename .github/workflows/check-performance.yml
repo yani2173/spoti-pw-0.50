@@ -1,0 +1,29 @@
+name: Check 0.50.0 performance add-on
+on:
+  push:
+    branches: ['optimize/**']
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  check:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Packaging regression tests
+        run: python3 -m unittest discover -s tests -v
+      - name: Test the actual add-on with UIKit stand-ins
+        run: |
+          mkdir -p out
+          xcrun clang -fobjc-arc -DSG_PERFORMANCE_TEST -Wall -Wextra -Werror \
+            tests/performance-main.m performance/SGPerformance.m -framework Foundation -o out/performance-tests
+          out/performance-tests
+      - name: Build the iOS add-on
+        run: scripts/build-performance.sh
+      - uses: actions/upload-artifact@v5
+        with:
+          name: SGPerformance050
+          path: out/SGPerformance050.dylib
