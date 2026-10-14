@@ -23,7 +23,7 @@ with open(path, "r+b") as f:
     off = 32
     for _ in range(ncmds):
         cmd, cmdsize = struct.unpack_from("<II", data, off)
-        if cmd in (0xC, 0x18, 0x1F) and data[off + 24:off + cmdsize].split(b"\0")[0] == name.encode():
+        if (cmd & 0x7FFFFFFF) in (0xC, 0x18, 0x1F) and data[off + 24:off + cmdsize].split(b"\0")[0] == name.encode():
             print(f"    {name} already loaded")
             sys.exit(0)
         if cmd == LC_SEGMENT_64:
