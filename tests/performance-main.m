@@ -70,7 +70,7 @@ NSNotificationName const UIApplicationDidBecomeActiveNotification = @"UIApplicat
 @end
 @implementation SGVisualizerTicker
 @end
-@interface SGRPlayerAnimatedView : NSObject
+@interface SGTestAnimatedCoverModel : NSObject
 @property (nonatomic) BOOL playing;
 @property (nonatomic) BOOL clipPlaying;
 @property (nonatomic) NSInteger windowMoves;
@@ -78,14 +78,22 @@ NSNotificationName const UIApplicationDidBecomeActiveNotification = @"UIApplicat
 - (void)didMoveToWindow;
 - (void)showClip:(id)clip;
 @end
-@implementation SGRPlayerAnimatedView
+@implementation SGTestAnimatedCoverModel
 - (void)didMoveToWindow { self.windowMoves++; }
 - (void)showClip:(id)clip { self.lastClip = clip; self.clipPlaying = self.playing; }
 @end
-@interface SGModRow : NSObject
+@interface SGRPlayerAnimatedView : SGTestAnimatedCoverModel
+@end
+@implementation SGRPlayerAnimatedView
+@end
+@interface SGTestSettingsRowModel : NSObject
 @property (nonatomic, copy) NSString *title, *subtitle, *key, *symbol;
 @property (nonatomic) BOOL defaultOn;
 @property (nonatomic, copy) void (^changed)(BOOL on);
+@end
+@implementation SGTestSettingsRowModel
+@end
+@interface SGModRow : SGTestSettingsRowModel
 @end
 @implementation SGModRow
 @end
@@ -115,7 +123,8 @@ int main(int argc, const char *argv[]) {
         [NSUserDefaults.standardUserDefaults removeObjectForKey:SGPerformanceLightModeKey];
         if (argc > 1 && strcmp(argv[1], "unsupported-settings") == 0) {
             Method setter = class_getInstanceMethod(SGModRow.class, @selector(setChanged:));
-            class_replaceMethod(SGModRow.class, @selector(setChanged:), method_getImplementation(setter), "v20@0:8B16");
+            require(class_addMethod(SGModRow.class, @selector(setChanged:), method_getImplementation(setter), "v20@0:8B16"),
+                    "test installs an incompatible settings signature");
             SGInstallPerformance();
             SGModPage *page = [SGModPage new];
             page.title = @"Chroma";
@@ -126,7 +135,8 @@ int main(int argc, const char *argv[]) {
         }
         if (argc > 1 && strcmp(argv[1], "unsupported-cover") == 0) {
             Method setter = class_getInstanceMethod(SGRPlayerAnimatedView.class, @selector(setPlaying:));
-            class_replaceMethod(SGRPlayerAnimatedView.class, @selector(setPlaying:), method_getImplementation(setter), "v24@0:8d16");
+            require(class_addMethod(SGRPlayerAnimatedView.class, @selector(setPlaying:), method_getImplementation(setter), "v24@0:8d16"),
+                    "test installs an incompatible cover signature");
             SGInstallPerformance();
             SGSetLightMode(YES);
             SGRPlayerAnimatedView *view = [SGRPlayerAnimatedView new];
@@ -376,6 +386,9 @@ int main(int argc, const char *argv[]) {
         SGRPlayerAnimatedView *pausedCover = [SGRPlayerAnimatedView new];
         pausedCover.playing = NO;
         light.changed(YES);
+        SGTestAnimatedCoverModel *unrelatedCover = [SGTestAnimatedCoverModel new];
+        unrelatedCover.playing = YES;
+        require(unrelatedCover.playing, "cover hooks do not replace inherited superclass implementations globally");
         require([NSUserDefaults.standardUserDefaults boolForKey:light.key], "the UI callback persists Light mode");
         require(warpLink.isPaused && visualizerLink.isPaused && !reentrant.link.isPaused,
                 "Light mode suspends GPU work while leaving lyrics live");

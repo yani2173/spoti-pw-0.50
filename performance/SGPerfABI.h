@@ -19,3 +19,10 @@ static inline BOOL SGPerfHasMethod(Class cls, SEL selector, char result, const c
     }
     return YES;
 }
+
+static inline void SGPerfReplaceMethod(Class cls, SEL selector, IMP implementation) {
+    Method method = class_getInstanceMethod(cls, selector);
+    // Override an inherited method on this class instead of replacing its superclass's method.
+    if (!class_addMethod(cls, selector, implementation, method_getTypeEncoding(method)))
+        method_setImplementation(method, implementation);
+}

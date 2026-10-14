@@ -324,9 +324,9 @@ void SGInstallPerformance(void) {
             sg_coverPlaying = (void (*)(id, SEL, BOOL))method_getImplementation(setter);
             sg_coverWindow = (void (*)(id, SEL))method_getImplementation(window);
             sg_coverClip = (void (*)(id, SEL, id))method_getImplementation(clip);
-            method_setImplementation(setter, (IMP)setCoverPlaying);
-            method_setImplementation(window, (IMP)coverMovedToWindow);
-            method_setImplementation(clip, (IMP)showCoverClip);
+            SGPerfReplaceMethod(coverClass, NSSelectorFromString(@"setPlaying:"), (IMP)setCoverPlaying);
+            SGPerfReplaceMethod(coverClass, NSSelectorFromString(@"didMoveToWindow"), (IMP)coverMovedToWindow);
+            SGPerfReplaceMethod(coverClass, NSSelectorFromString(@"showClip:"), (IMP)showCoverClip);
         }
         SGInstallPerformanceSettings();
         NSLog(@"[spoti-perf] 0.51.0: lyrics lifecycle and player-transition suspension installed");

@@ -1,5 +1,8 @@
 #import <Foundation/Foundation.h>
 
+// Recent macOS versions also have CADisplayLink. Give the stand-in a distinct runtime class name.
+#define CADisplayLink SGTestDisplayLink
+
 typedef NS_ENUM(NSInteger, UIApplicationState) {
     UIApplicationStateActive, UIApplicationStateInactive, UIApplicationStateBackground
 };

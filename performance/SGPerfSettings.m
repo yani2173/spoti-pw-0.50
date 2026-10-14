@@ -76,6 +76,6 @@ void SGInstallPerformanceSettings(void) {
         if (!SGPerfHasMethod(sg_sectionClass, @selector(rows), '@', "")) return;
         Method adopt = class_getInstanceMethod(pageClass, NSSelectorFromString(@"adopt:"));
         sg_adopt = (void (*)(id, SEL, NSArray *))method_getImplementation(adopt);
-        method_setImplementation(adopt, (IMP)adoptSections);
+        SGPerfReplaceMethod(pageClass, NSSelectorFromString(@"adopt:"), (IMP)adoptSections);
     });
 }
