@@ -60,11 +60,11 @@ Its native row writes the preference and invokes the changed callback; the add-o
 immediately. The saved value is read at installation. Default changes also refresh it, including
 reset/import, and the key uses the prefix already covered by the mod's settings backup/reset.
 
-While on, the mode suspends the verified moving-background and visualizer display links. Lyrics
-continue with their original timing and frame-rate settings. GPU links created or resumed while
-the mode is active stay paused. Owner pause requests and transition/inactive suspension still win
-when it is turned off. Background colors and artwork updates can still draw their static contents;
-the mode is scoped to continuous decorative animation, rather than all UIKit animations.
+While on, the mode suspends moving-background display links and uses the visualizer's original
+stop path to shut down its processing and input work. Remaining verified GPU links stay paused.
+Lyrics continue with their original timing and frame-rate settings. Owner pause requests and
+transition/inactive suspension still win when it is turned off. Background colors and artwork
+continue updating their static content, with the decorative transitions reduced as described below.
 
 Animated player covers use a separate weak view registry. `SGRPlayerAnimatedView.setPlaying:` at
 `0xfe538` has signature `v20@0:8B16` and updates its clips. `_playing` is a one-byte BOOL at offset
@@ -115,6 +115,10 @@ ownership, invalidation, unsupported signatures, and preserved frame rates. CI c
 iOS dylib. Light mode tests cover native settings integration, rebuild deduplication, defaults,
 startup restoration, live switching, paused/new GPU links, lyrics, animated cover requests,
 new clips, inactive restoration, reset, weak view ownership and unsupported settings/cover ABIs.
+The lighter-rendering tests also exercise original visualizer stop/resume requests, input processing,
+late views, startup, reentrant policy changes, access checks, retained static frames, generation-checked
+clip readiness and scoped decorative transitions. Policy integration tests cover manual and automatic
+activation/recovery, including heat hysteresis.
 Automatic-mode checks cover opt-in defaults, live and saved startup behavior, Low Power Mode,
 Serious/Critical pressure, cooling hysteresis, Fair startup, overlapping triggers, manual priority,
 status changes, owner pauses, missed foreground conditions, off-main/stale notifications and reset.
@@ -158,3 +162,49 @@ provider values, valid/whitespace/protobuf inputs, forwarding, errors, version/i
 clock changes and immutable metadata. CI also builds the iOS code and verifies packaged core sections.
 These are not end-to-end tests of the iOS core or lock-screen UI; check lyrics loading and disabling
 lock-screen lyrics during playback on a device after installing the optimized build.
+
+
+## Lighter rendering in Light mode
+
+`SGLightRendering.m` takes the effective manual/automatic policy and app activity from
+`SGPerformance.m` on the main thread. It keeps visualizer views weakly and retains each owner's
+latest running request separately. It never overwrites the owner's preference or starts an
+owner-stopped view when the policy changes. Repeated unchanged policy updates avoid new work.
+
+The actual 0.51.0 `SGVisualizerView.setRunning:` (`0x2ecfec`, `v20@0:8B16`) writes `_running`
+only when changed and calls `updateLink` (`0x2ed0e0`, `v16@0:8`). `running` is at `0x2f0534`,
+`B16@0:8`. The add-on clamps that runtime request while Light mode or app inactivity applies,
+including creation/window/input updates through `updateLink`. It forwards the original method,
+so the original availability, window, power and heat checks still decide whether work can run.
+The original stop path invalidates the display link and updates its input consumers instead of
+only pausing the add-on's display link. `updateInputs` (`0x2ee67c`) stops the visualizer's analysis
+consumer when no link is present (`0x2ee6fc`) and sends `setPlaying:NO` to its video input
+(`0x2ee798–0x2ee7a4`). That clip's setter (`0x2ddff8`) pauses its own AVPlayer. This affects
+decorative visualizer inputs, not Spotify's audio playback or Sing's processing. Static renderer
+content and the owner's latest request are retained; original processing is restored when allowed.
+
+The following original decorative methods receive `animated:NO` in Light mode while retaining
+all other arguments and updates:
+
+- `SGRWarpLayer.setArtwork:animated:` (`0xb0930`, `v28@0:8@16B24`). Its `takePending`
+  (`0xb0e14`, `v16@0:8`) also clamps the verified BOOL `_pendingAnimated`, so artwork conversion
+  queued before activation cannot introduce a late fade. The original static draw path remains.
+- `SGRPlayerAnimatedView.show:animated:` (`0xfd73c`, `v24@0:8B16B20`),
+  `setColor:animated:` (`0xfdb50`, `v28@0:8@16B24`), `dimFrom:animated:`
+  (`0xfdca8`, `v24@0:8f16B20`) and `setLyricsUp:animated:` (`0xfe634`, `v24@0:8B16B20`).
+- `SGRPlayerVisualizerHost.show:animated:` (`0x1432e4`, `v24@0:8B16B20`) and
+  `setLyricsUp:animated:` (`0x143668`, `v24@0:8B16B20`).
+
+For a ready animated cover, `fadeIn:generation:` (`0xfe1b4`, `v32@0:8@16Q24`) checks the current
+clip and `_generation` (verified unsigned 64-bit ivar) before starting its crossfade. In Light mode,
+the add-on performs those same identity/generation checks, then calls the original `dropLeaving`
+(`0xfe0b0`) before forwarding readiness. The core therefore displays the ready new clip without
+crossfading old video layers; its cleanup stops their players and removes their layers. Stale ready
+callbacks retain their original no-op behavior, and artwork is kept until its replacement is ready.
+
+Hooks require the verified method and relevant ivar types. Inherited methods are overridden only on
+these classes; other UIKit animations and unrelated superclass instances remain unchanged. Off-main
+callbacks pass through. No new polling, per-frame scans, frame-rate limits or global animation policy
+are introduced. Existing lyrics repairs, Light mode opt-in defaults and original Plus checks remain.
+The regression tests use stand-in renderers; actual memory, battery and frame pacing need measurement
+on a phone, and no numerical device-performance gain is claimed.

@@ -58,7 +58,7 @@ static void adoptSections(id<SGPerfSettingsPage> page, SEL cmd, NSArray *section
     if (!hasLightMode) {
         id<SGPerfSettingsRow> row = [sg_rowClass new];
         row.title = @"Light mode";
-        row.subtitle = @"Always keep backgrounds still and pause animated covers";
+        row.subtitle = @"Stop visualizer processing, pause animated covers and reduce transitions";
         row.key = SGPerformanceLightModeKey;
         row.defaultOn = NO;
         row.symbol = @"leaf";
