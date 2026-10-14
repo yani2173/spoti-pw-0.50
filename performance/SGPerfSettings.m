@@ -16,6 +16,7 @@
 @property (nonatomic) BOOL defaultOn;
 @property (nonatomic, copy) void (^changed)(BOOL on);
 @property (nonatomic, copy) void (^action)(void);
+@property (nonatomic, copy) NSString *(^value)(void);
 @end
 
 @protocol SGPerfSettingsSection <NSObject>
@@ -57,15 +58,25 @@ static void adoptSections(id<SGPerfSettingsPage> page, SEL cmd, NSArray *section
     if (!hasLightMode) {
         id<SGPerfSettingsRow> row = [sg_rowClass new];
         row.title = @"Light mode";
-        row.subtitle = @"Keep backgrounds still and pause animated covers";
+        row.subtitle = @"Always keep backgrounds still and pause animated covers";
         row.key = SGPerformanceLightModeKey;
         row.defaultOn = NO;
         row.symbol = @"leaf";
         row.changed = ^(BOOL on) { SGSetLightMode(on); };
+        id<SGPerfSettingsRow> automatic = [sg_rowClass new];
+        automatic.title = @"Automatic Light mode";
+        automatic.subtitle = @"Use Light mode for Low Power Mode or high temperature";
+        automatic.key = SGPerformanceAutomaticLightModeKey;
+        automatic.defaultOn = NO;
+        automatic.symbol = @"sparkles";
+        automatic.changed = ^(BOOL on) { SGSetAutomaticLightMode(on); };
+        id<SGPerfSettingsRow> status = [sg_rowClass new];
+        status.title = @"Status";
+        status.value = ^NSString *{ return SGPerformanceLightModeStatus(); };
         id<SGPerfSettingsSection> section = [sg_sectionClass new];
         section.title = @"Performance";
-        section.rows = @[row];
-        section.footer = @"Applies immediately. Music controls and synchronized lyrics stay available.";
+        section.rows = @[row, automatic, status];
+        section.footer = @"Manual Light mode stays on. Automatic mode restores effects after Low Power Mode ends and the phone cools down. Music controls and synchronized lyrics stay available.";
         [augmented addObject:section];
     }
     if (!hasCredit) {
@@ -93,7 +104,7 @@ void SGInstallPerformanceSettings(void) {
         sg_sectionClass = NSClassFromString(@"SGModSection");
         if (!SGPerfHasMethod(pageClass, @selector(adopt:), 'v', "@") ||
             !SGPerfHasMethod(pageClass, @selector(title), '@', "")) return;
-        for (NSString *name in @[@"setTitle:", @"setSubtitle:", @"setKey:", @"setSymbol:", @"setChanged:", @"setAction:"])
+        for (NSString *name in @[@"setTitle:", @"setSubtitle:", @"setKey:", @"setSymbol:", @"setChanged:", @"setAction:", @"setValue:"])
             if (!SGPerfHasMethod(sg_rowClass, NSSelectorFromString(name), 'v', "@")) return;
         if (!SGPerfHasMethod(sg_rowClass, @selector(setDefaultOn:), 'v', "B") ||
             !SGPerfHasMethod(sg_rowClass, @selector(key), '@', "")) return;

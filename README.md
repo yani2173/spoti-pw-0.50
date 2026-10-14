@@ -82,6 +82,10 @@ In the optimized build, open **Mod Settings → Performance → Light mode** to 
 and the visualizer still and pause animated player covers. The switch is off by default, applies
 immediately and persists across launches. Music controls and synchronized lyrics stay available.
 Turning it off restores the visual effects requested by the app without overriding its pause states.
+**Automatic Light mode** is a separate, default-off switch in the same section. Enable it to use
+Light mode during Low Power Mode or serious/critical thermal pressure. Effects return when power
+saving ends and the phone has cooled to its normal thermal state; a manual Light mode choice stays
+on. The **Status** row shows the current mode and reason. Both switches apply live and persist.
 The bottom of Mod Settings also has **Modified by Yani**; tap it to open https://yaniminchev.eu.
 
 The add-on is described in [performance/README.md](performance/README.md), including the ABI evidence

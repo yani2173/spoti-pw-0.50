@@ -27,6 +27,9 @@ jobs:
           out/performance-tests unsupported-settings
           out/performance-tests unsupported-cover
           out/performance-tests light-mode-seeded
+          out/performance-tests automatic-seeded-power
+          out/performance-tests automatic-seeded-thermal
+          out/performance-tests automatic-seeded-fair
       - name: Build the iOS add-on
         run: scripts/build-performance.sh
       - name: Install real IPA packaging tools

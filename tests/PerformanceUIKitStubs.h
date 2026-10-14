@@ -2,6 +2,13 @@
 
 // Recent macOS versions also have CADisplayLink. Give the stand-in a distinct runtime class name.
 #define CADisplayLink SGTestDisplayLink
+#define NSProcessInfo SGTestProcessInfo
+
+@interface SGTestProcessInfo : NSObject
++ (instancetype)processInfo;
+@property (nonatomic, getter=isLowPowerModeEnabled) BOOL lowPowerModeEnabled;
+@property (nonatomic) NSProcessInfoThermalState thermalState;
+@end
 
 typedef NS_ENUM(NSInteger, UIApplicationState) {
     UIApplicationStateActive, UIApplicationStateInactive, UIApplicationStateBackground

@@ -49,6 +49,11 @@
 static BOOL sg_inactive;
 static BOOL sg_transitioning;
 static BOOL sg_lightMode;
+static BOOL sg_manualLightMode;
+static BOOL sg_automaticLightMode;
+static BOOL sg_lowPower;
+static BOOL sg_thermalLimited;
+static NSProcessInfoThermalState sg_thermalState;
 static Class sg_lyricsClass;
 static Class sg_warpTickerClass;
 static Class sg_visualizerTickerClass;
@@ -69,6 +74,28 @@ static atomic_uint_fast64_t sg_transitionGeneration;
 static BOOL suspended(void) { return sg_inactive || sg_transitioning; }
 
 NSString *const SGPerformanceLightModeKey = @"spotifyglass.performance.lightMode";
+NSString *const SGPerformanceAutomaticLightModeKey = @"spotifyglass.performance.automaticLightMode";
+
+static BOOL desiredLightMode(void) {
+    NSUserDefaults *store = NSUserDefaults.standardUserDefaults;
+    sg_manualLightMode = [store boolForKey:SGPerformanceLightModeKey];
+    sg_automaticLightMode = [store boolForKey:SGPerformanceAutomaticLightModeKey];
+    NSProcessInfo *process = NSProcessInfo.processInfo;
+    sg_lowPower = process.lowPowerModeEnabled;
+    sg_thermalState = process.thermalState;
+    if (sg_thermalState >= NSProcessInfoThermalStateSerious) sg_thermalLimited = YES;
+    else if (sg_thermalState == NSProcessInfoThermalStateNominal) sg_thermalLimited = NO;
+    // Keep a heat-triggered reduction through Fair until Nominal, avoiding repeated toggling.
+    return sg_manualLightMode || (sg_automaticLightMode && (sg_lowPower || sg_thermalLimited));
+}
+
+NSString *SGPerformanceLightModeStatus(void) {
+    if (sg_manualLightMode) return @"Light · Manual";
+    if (!sg_lightMode) return @"Normal";
+    if (sg_lowPower) return @"Light · Low Power";
+    if (sg_thermalState >= NSProcessInfoThermalStateSerious) return @"Light · Heat";
+    return @"Light · Cooling";
+}
 
 static BOOL targetSuspended(SGPerfDisplayTarget *proxy) {
     return suspended() || (sg_lightMode && proxy.takesLink);
@@ -192,8 +219,12 @@ static void invalidateLink(id link, SEL cmd) {
         objc_setAssociatedObject(link, &sg_proxyKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 }
 
+static void refreshLightMode(void);
+
 static void setActive(BOOL active) {
     sg_inactive = !active;
+    // A suspended process may miss a power/thermal event. Read current conditions before resuming.
+    if (active) refreshLightMode();
     if (!active) {
         sg_transitioning = NO;
         atomic_fetch_add_explicit(&sg_transitionGeneration, 1, memory_order_relaxed);
@@ -206,7 +237,7 @@ static void setActive(BOOL active) {
 }
 
 static void refreshLightMode(void) {
-    BOOL on = [NSUserDefaults.standardUserDefaults boolForKey:SGPerformanceLightModeKey];
+    BOOL on = desiredLightMode();
     if (on == sg_lightMode) return;
     sg_lightMode = on;
     for (SGPerfDisplayTarget *target in sg_targets.allObjects) applyState(target);
@@ -215,6 +246,12 @@ static void refreshLightMode(void) {
 
 void SGSetLightMode(BOOL on) {
     [NSUserDefaults.standardUserDefaults setBool:on forKey:SGPerformanceLightModeKey];
+    if (NSThread.isMainThread) refreshLightMode();
+    else dispatch_async(dispatch_get_main_queue(), ^{ refreshLightMode(); });
+}
+
+void SGSetAutomaticLightMode(BOOL on) {
+    [NSUserDefaults.standardUserDefaults setBool:on forKey:SGPerformanceAutomaticLightModeKey];
     if (NSThread.isMainThread) refreshLightMode();
     else dispatch_async(dispatch_get_main_queue(), ^{ refreshLightMode(); });
 }
@@ -278,17 +315,28 @@ void SGInstallPerformance(void) {
         sg_visualizerTickerClass = tickerClass(@"SGVisualizerTicker");
         sg_targets = [NSHashTable weakObjectsHashTable];
         sg_animatedCovers = [NSHashTable weakObjectsHashTable];
-        sg_lightMode = [NSUserDefaults.standardUserDefaults boolForKey:SGPerformanceLightModeKey];
+        sg_lightMode = desiredLightMode();
         sg_inactive = UIApplication.sharedApplication.applicationState != UIApplicationStateActive;
         sg_factory = (CADisplayLink *(*)(id, SEL, id, SEL))method_getImplementation(factory);
         sg_pause = (void (*)(id, SEL, BOOL))method_getImplementation(paused);
         sg_invalidate = (void (*)(id, SEL))method_getImplementation(invalidated);
         NSNotificationCenter *center = NSNotificationCenter.defaultCenter;
-        [center addObserverForName:NSUserDefaultsDidChangeNotification object:nil queue:nil usingBlock:^(NSNotification *note) {
-            (void)note;
-            if (NSThread.isMainThread) refreshLightMode();
-            else dispatch_async(dispatch_get_main_queue(), ^{ refreshLightMode(); });
-        }];
+        for (NSNotificationName name in @[NSUserDefaultsDidChangeNotification,
+                                          NSProcessInfoPowerStateDidChangeNotification,
+                                          NSProcessInfoThermalStateDidChangeNotification]) {
+            [center addObserverForName:name object:nil queue:nil usingBlock:^(NSNotification *note) {
+                BOOL defaultsChanged = [note.name isEqualToString:NSUserDefaultsDidChangeNotification];
+                void (^refresh)(void) = ^{
+                    NSUserDefaults *store = NSUserDefaults.standardUserDefaults;
+                    if (defaultsChanged &&
+                        [store boolForKey:SGPerformanceLightModeKey] == sg_manualLightMode &&
+                        [store boolForKey:SGPerformanceAutomaticLightModeKey] == sg_automaticLightMode) return;
+                    refreshLightMode();
+                };
+                if (NSThread.isMainThread) refresh();
+                else dispatch_async(dispatch_get_main_queue(), refresh);
+            }];
+        }
         [center addObserverForName:UIApplicationWillResignActiveNotification object:nil
                             queue:nil usingBlock:^(NSNotification *note) {
             (void)note;

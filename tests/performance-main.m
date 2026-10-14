@@ -5,6 +5,14 @@
 
 static void require(BOOL condition, const char *message);
 static BOOL nilFactory;
+@implementation SGTestProcessInfo
++ (instancetype)processInfo {
+    static SGTestProcessInfo *process;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{ process = [SGTestProcessInfo new]; });
+    return process;
+}
+@end
 NSNotificationName const UIApplicationWillResignActiveNotification = @"UIApplicationWillResignActiveNotification";
 NSNotificationName const UIApplicationDidBecomeActiveNotification = @"UIApplicationDidBecomeActiveNotification";
 @implementation UIApplication
@@ -96,6 +104,7 @@ NSNotificationName const UIApplicationDidBecomeActiveNotification = @"UIApplicat
 @property (nonatomic) BOOL defaultOn;
 @property (nonatomic, copy) void (^changed)(BOOL on);
 @property (nonatomic, copy) void (^action)(void);
+@property (nonatomic, copy) NSString *(^value)(void);
 @end
 @implementation SGTestSettingsRowModel
 @end
@@ -127,6 +136,33 @@ static void notify(NSNotificationName name) {
 int main(int argc, const char *argv[]) {
     @autoreleasepool {
         [NSUserDefaults.standardUserDefaults removeObjectForKey:SGPerformanceLightModeKey];
+        [NSUserDefaults.standardUserDefaults removeObjectForKey:SGPerformanceAutomaticLightModeKey];
+        if (argc > 1 && [[NSString stringWithUTF8String:argv[1]] hasPrefix:@"automatic-seeded-"]) {
+            BOOL power = strcmp(argv[1], "automatic-seeded-power") == 0;
+            BOOL fair = strcmp(argv[1], "automatic-seeded-fair") == 0;
+            [NSUserDefaults.standardUserDefaults setBool:YES forKey:SGPerformanceAutomaticLightModeKey];
+            NSProcessInfo.processInfo.lowPowerModeEnabled = power;
+            NSProcessInfo.processInfo.thermalState = power ? NSProcessInfoThermalStateNominal :
+                (fair ? NSProcessInfoThermalStateFair : NSProcessInfoThermalStateSerious);
+            SGInstallPerformance();
+            SGRWarpTicker *ticker = [SGRWarpTicker new];
+            CADisplayLink *gpu = [CADisplayLink displayLinkWithTarget:ticker selector:@selector(tick:)];
+            SGRKaraokeView *view = [SGRKaraokeView new];
+            CADisplayLink *lyrics = [CADisplayLink displayLinkWithTarget:view selector:@selector(tick)];
+            SGRPlayerAnimatedView *cover = [SGRPlayerAnimatedView new];
+            cover.playing = YES;
+            require(gpu.isPaused == !fair && cover.playing == fair && !lyrics.isPaused,
+                    "saved automatic mode applies current startup conditions without stopping lyrics");
+            require(![NSUserDefaults.standardUserDefaults boolForKey:SGPerformanceLightModeKey],
+                    "automatic activation does not rewrite manual Light mode");
+            NSProcessInfo.processInfo.lowPowerModeEnabled = NO;
+            NSProcessInfo.processInfo.thermalState = NSProcessInfoThermalStateNominal;
+            notify(NSProcessInfoPowerStateDidChangeNotification);
+            require(!gpu.isPaused && cover.playing, "automatic startup mode restores visuals when conditions normalize");
+            SGSetAutomaticLightMode(NO);
+            puts("PASS: automatic Light mode startup conditions");
+            return 0;
+        }
         if (argc > 1 && strcmp(argv[1], "unsupported-settings") == 0) {
             Method setter = class_getInstanceMethod(SGModRow.class, @selector(setChanged:));
             require(class_addMethod(SGModRow.class, @selector(setChanged:), method_getImplementation(setter), "v20@0:8B16"),
@@ -379,6 +415,11 @@ int main(int argc, const char *argv[]) {
         require([performance.title isEqualToString:@"Performance"] && [light.title isEqualToString:@"Light mode"] &&
                 [light.key isEqualToString:SGPerformanceLightModeKey] && !light.defaultOn && light.changed,
                 "the native settings model exposes a default-off Light mode switch");
+        require(performance.rows.count == 3, "Performance exposes manual, automatic and status rows");
+        SGModRow *automatic = performance.rows[1];
+        SGModRow *status = performance.rows[2];
+        require([automatic.key isEqualToString:SGPerformanceAutomaticLightModeKey] && !automatic.defaultOn && automatic.changed && status.value,
+                "automatic mode is a separate default-off switch with an effective status");
         [root adopt:root.sections];
         require(root.sections.count == 3 && root.adoptions == 2, "re-adopting existing rows does not duplicate the sections");
         [root adopt:@[existing]];
@@ -440,7 +481,102 @@ int main(int argc, const char *argv[]) {
             [temporaryCover didMoveToWindow];
         }
         require(releasedCover == nil, "the animated cover registry holds no views strongly");
-        puts("PASS: lifecycle, transition suspension, settings integration, live/persistent Light mode, animated covers, owner state and lyrics");
+        require([status.value() isEqualToString:@"Normal"], "status starts in the normal mode");
+        NSProcessInfo.processInfo.lowPowerModeEnabled = YES;
+        notify(NSProcessInfoPowerStateDidChangeNotification);
+        require(!warpLink.isPaused && cover.playing, "automatic behavior stays opt-in while Low Power Mode is active");
+        automatic.changed(YES);
+        require(warpLink.isPaused && !cover.playing && !reentrant.link.isPaused,
+                "enabling automatic mode applies existing Low Power Mode immediately");
+        require([NSUserDefaults.standardUserDefaults boolForKey:automatic.key] &&
+                ![NSUserDefaults.standardUserDefaults boolForKey:light.key], "automatic mode persists without rewriting the manual choice");
+        require([status.value() isEqualToString:@"Light · Low Power"], "status identifies the active power reason");
+        notify(@"spotifyglass.playerTransition");
+        notify(@"spotifyglass.playerTransitionEnded");
+        require(warpLink.isPaused, "a transition end cannot override automatic Light mode");
+        NSProcessInfo.processInfo.lowPowerModeEnabled = NO;
+        notify(NSProcessInfoPowerStateDidChangeNotification);
+        require(!warpLink.isPaused && cover.playing, "Low Power Mode ending restores requested visual states");
+        NSProcessInfo.processInfo.thermalState = NSProcessInfoThermalStateFair;
+        notify(NSProcessInfoThermalStateDidChangeNotification);
+        require(!warpLink.isPaused, "Fair alone does not trigger a new heat reduction");
+        NSProcessInfo.processInfo.thermalState = NSProcessInfoThermalStateSerious;
+        notify(NSProcessInfoThermalStateDidChangeNotification);
+        require(warpLink.isPaused && !cover.playing && [status.value() isEqualToString:@"Light · Heat"],
+                "Serious thermal pressure pauses visual work");
+        NSProcessInfo.processInfo.thermalState = NSProcessInfoThermalStateCritical;
+        notify(NSProcessInfoThermalStateDidChangeNotification);
+        require(warpLink.isPaused, "Critical thermal pressure remains reduced");
+        NSProcessInfo.processInfo.thermalState = NSProcessInfoThermalStateFair;
+        notify(NSProcessInfoThermalStateDidChangeNotification);
+        require(warpLink.isPaused && [status.value() isEqualToString:@"Light · Cooling"],
+                "heat recovery remains reduced through Fair to avoid repeated switching");
+        NSProcessInfo.processInfo.thermalState = NSProcessInfoThermalStateNominal;
+        notify(NSProcessInfoThermalStateDidChangeNotification);
+        require(!warpLink.isPaused && cover.playing && [status.value() isEqualToString:@"Normal"],
+                "Nominal thermal recovery restores visuals");
+        light.changed(YES);
+        NSProcessInfo.processInfo.lowPowerModeEnabled = YES;
+        notify(NSProcessInfoPowerStateDidChangeNotification);
+        NSProcessInfo.processInfo.lowPowerModeEnabled = NO;
+        notify(NSProcessInfoPowerStateDidChangeNotification);
+        require(warpLink.isPaused && [status.value() isEqualToString:@"Light · Manual"],
+                "automatic recovery cannot disable a manually requested Light mode");
+        automatic.changed(NO);
+        require(warpLink.isPaused, "disabling automatic mode does not override manual Light mode");
+        light.changed(NO);
+        require(!warpLink.isPaused, "manual mode can still be disabled independently");
+        automatic.changed(YES);
+        NSProcessInfo.processInfo.lowPowerModeEnabled = YES;
+        notify(NSProcessInfoPowerStateDidChangeNotification);
+        NSProcessInfo.processInfo.thermalState = NSProcessInfoThermalStateSerious;
+        notify(NSProcessInfoThermalStateDidChangeNotification);
+        NSProcessInfo.processInfo.lowPowerModeEnabled = NO;
+        notify(NSProcessInfoPowerStateDidChangeNotification);
+        require(warpLink.isPaused && [status.value() isEqualToString:@"Light · Heat"],
+                "ending one automatic trigger keeps the other trigger active and updates status");
+        NSProcessInfo.processInfo.thermalState = NSProcessInfoThermalStateNominal;
+        notify(NSProcessInfoThermalStateDidChangeNotification);
+        warpLink.paused = YES;
+        cover.playing = NO;
+        NSProcessInfo.processInfo.lowPowerModeEnabled = YES;
+        notify(NSProcessInfoPowerStateDidChangeNotification);
+        NSProcessInfo.processInfo.lowPowerModeEnabled = NO;
+        notify(NSProcessInfoPowerStateDidChangeNotification);
+        require(warpLink.isPaused && !cover.playing, "automatic recovery preserves owner-paused visuals");
+        warpLink.paused = NO;
+        cover.playing = YES;
+        notify(UIApplicationWillResignActiveNotification);
+        NSProcessInfo.processInfo.lowPowerModeEnabled = YES; // no notification while suspended
+        notify(UIApplicationDidBecomeActiveNotification);
+        require(warpLink.isPaused && !cover.playing, "foreground activation refreshes conditions missed while suspended");
+        notify(UIApplicationWillResignActiveNotification);
+        NSProcessInfo.processInfo.lowPowerModeEnabled = NO;
+        notify(NSProcessInfoPowerStateDidChangeNotification);
+        require(warpLink.isPaused && !cover.playing, "automatic recovery cannot resume an inactive app");
+        notify(UIApplicationDidBecomeActiveNotification);
+        require(!warpLink.isPaused && cover.playing, "foreground activation restores visuals after recovery");
+        dispatch_sync(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+            NSProcessInfo.processInfo.lowPowerModeEnabled = YES;
+            notify(NSProcessInfoPowerStateDidChangeNotification);
+        });
+        NSProcessInfo.processInfo.lowPowerModeEnabled = NO;
+        notify(NSProcessInfoPowerStateDidChangeNotification);
+        drainedNotifications = NO;
+        dispatch_async(dispatch_get_main_queue(), ^{ drainedNotifications = YES; });
+        notificationDeadline = [NSDate dateWithTimeIntervalSinceNow:1];
+        while (!drainedNotifications && notificationDeadline.timeIntervalSinceNow > 0)
+            [NSRunLoop.currentRunLoop runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.01]];
+        require(drainedNotifications && !warpLink.isPaused, "queued power notifications read current conditions instead of stale captured states");
+        NSProcessInfo.processInfo.lowPowerModeEnabled = YES;
+        notify(NSProcessInfoPowerStateDidChangeNotification);
+        [NSUserDefaults.standardUserDefaults removeObjectForKey:SGPerformanceAutomaticLightModeKey];
+        notify(NSUserDefaultsDidChangeNotification);
+        require(!warpLink.isPaused && [status.value() isEqualToString:@"Normal"], "resetting automatic mode updates the effective state live");
+        NSProcessInfo.processInfo.lowPowerModeEnabled = NO;
+        notify(NSProcessInfoPowerStateDidChangeNotification);
+        require(!untouched.isPaused, "automatic mode never suspends unrelated display-link targets");
+        puts("PASS: lifecycle, settings, manual/automatic Light mode, power/thermal recovery, hysteresis, owner state and lyrics");
     }
     return 0;
 }
