@@ -18,9 +18,6 @@ on:
         type: choice
         options: [artifacts, filebin, both]
 
-env:
-  THEOS: ${{ github.workspace }}/theos
-
 permissions:
   contents: read
 
