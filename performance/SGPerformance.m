@@ -1,6 +1,7 @@
 #import "SGPerformance.h"
 #import <objc/message.h>
 #import <objc/runtime.h>
+#include <stdatomic.h>
 #ifdef SG_PERFORMANCE_TEST
 #import "../tests/PerformanceUIKitStubs.h"
 #else
@@ -18,16 +19,43 @@
 - (void)tick:(CADisplayLink *)link;
 @end
 
+// The view owns this sentinel, but the sentinel only references links weakly. Even an owner-paused
+// link must be invalidated when its view goes away: it cannot reach the next tick to clean itself up.
+@interface SGPerfViewLifetime : NSObject
+@property (nonatomic, strong) NSHashTable<CADisplayLink *> *links;
+@end
+
+@implementation SGPerfViewLifetime
+- (void)dealloc {
+    NSArray<CADisplayLink *> *links = _links.allObjects;
+    void (^invalidate)(void) = ^{
+        for (CADisplayLink *link in links) [link invalidate];
+    };
+    if (NSThread.isMainThread) invalidate();
+    else dispatch_async(dispatch_get_main_queue(), invalidate);
+}
+@end
+
 static BOOL sg_inactive;
 static Class sg_lyricsClass;
 static NSHashTable<SGPerfDisplayTarget *> *sg_targets;
 static CADisplayLink *(*sg_factory)(id, SEL, id, SEL);
 static void (*sg_pause)(id, SEL, BOOL);
 static char sg_proxyKey;
+static char sg_lifetimeKey;
+static atomic_uint_fast64_t sg_activityGeneration;
 
 static void pauseTarget(SGPerfDisplayTarget *target) {
     CADisplayLink *link = target.link;
     if (link && !link.isPaused) sg_pause(link, @selector(setPaused:), YES);
+}
+
+static void applyState(SGPerfDisplayTarget *proxy) {
+    CADisplayLink *link = proxy.link;
+    if (!link) return;
+    if (!proxy.target) { [link invalidate]; return; }
+    BOOL paused = proxy.ownerPaused || sg_inactive;
+    if (link.isPaused != paused) sg_pause(link, @selector(setPaused:), paused);
 }
 
 @implementation SGPerfDisplayTarget
@@ -52,9 +80,17 @@ static CADisplayLink *displayLink(id cls, SEL cmd, id target, SEL selector) {
     SGPerfDisplayTarget *proxy = [SGPerfDisplayTarget new];
     proxy.target = target;
     CADisplayLink *link = sg_factory(cls, cmd, proxy, @selector(tick:));
+    if (!link) return nil;
     proxy.link = link;
     proxy.ownerPaused = link.isPaused;
-    if (link) objc_setAssociatedObject(link, &sg_proxyKey, proxy, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    objc_setAssociatedObject(link, &sg_proxyKey, proxy, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    SGPerfViewLifetime *lifetime = objc_getAssociatedObject(target, &sg_lifetimeKey);
+    if (!lifetime) {
+        lifetime = [SGPerfViewLifetime new];
+        lifetime.links = [NSHashTable weakObjectsHashTable];
+        objc_setAssociatedObject(target, &sg_lifetimeKey, lifetime, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+    [lifetime.links addObject:link];
     [sg_targets addObject:proxy];
     // WillResignActive can arrive while UIApplication still reports Active. The notification wins.
     if (sg_inactive || UIApplication.sharedApplication.applicationState != UIApplicationStateActive)
@@ -75,15 +111,20 @@ static void setPaused(id link, SEL cmd, BOOL paused) {
 static void setActive(BOOL active) {
     sg_inactive = !active;
     // A setter observer can create another link. Enumerate a snapshot so re-entrancy is safe.
-    for (SGPerfDisplayTarget *target in sg_targets.allObjects) {
-        if (!active) pauseTarget(target);
-        else if (target.link) sg_pause(target.link, @selector(setPaused:), target.ownerPaused);
-    }
+    // Read the current state for each link. A setter observer can post another app notification;
+    // the latest notification must win for the remainder of this snapshot too.
+    for (SGPerfDisplayTarget *target in sg_targets.allObjects) applyState(target);
 }
 
 static void notificationActive(BOOL active) {
-    if (NSThread.isMainThread) setActive(active);
-    else dispatch_async(dispatch_get_main_queue(), ^{ setActive(active); });
+    uint_fast64_t generation = atomic_fetch_add_explicit(&sg_activityGeneration, 1, memory_order_relaxed) + 1;
+    void (^apply)(void) = ^{
+        // An off-main notification can be queued before a newer main-thread notification.
+        if (atomic_load_explicit(&sg_activityGeneration, memory_order_relaxed) == generation)
+            setActive(active);
+    };
+    if (NSThread.isMainThread) apply();
+    else dispatch_async(dispatch_get_main_queue(), apply);
 }
 
 void SGInstallPerformance(void) {
@@ -98,6 +139,7 @@ void SGInstallPerformance(void) {
         Method paused = class_getInstanceMethod(CADisplayLink.class, @selector(setPaused:));
         if (!factory || !paused) return;
         sg_targets = [NSHashTable weakObjectsHashTable];
+        sg_inactive = UIApplication.sharedApplication.applicationState != UIApplicationStateActive;
         sg_factory = (CADisplayLink *(*)(id, SEL, id, SEL))method_getImplementation(factory);
         sg_pause = (void (*)(id, SEL, BOOL))method_getImplementation(paused);
         NSNotificationCenter *center = NSNotificationCenter.defaultCenter;

@@ -20,7 +20,13 @@ KIT = os.environ.get("SG_OFFICIAL_KIT")
 APP = "Payload/Spotify.app/"
 
 
-def executable():
+def dylib_command(path):
+    name = path.encode() + b"\0"
+    size = (24 + len(name) + 7) & ~7
+    return struct.pack("<IIIIII", 0xC, size, 24, 0, 0, 0) + name + b"\0" * (size - 24 - len(name))
+
+
+def executable(extra_commands=()):
     def segment(name, addr, offset, size, sections=b""):
         return struct.pack("<II16sQQQQiiII", 0x19, 72 + len(sections), name, addr, 8192,
                            offset, size, 7, 5, len(sections) // 80, 0) + sections
@@ -31,7 +37,7 @@ def executable():
                 segment(b"__LINKEDIT", base + 8192, 8192, 1),
                 struct.pack("<IIIIII", 0x32, 24, 2, 0x100100, 0x1A0000, 0),
                 struct.pack("<IIQQ", 0x80000028, 24, 4096, 0),
-                struct.pack("<IIIIII", 2, 24, 8192, 0, 8192, 1)]
+                struct.pack("<IIIIII", 2, 24, 8192, 0, 8192, 1), *extra_commands]
     header = struct.pack("<IiiIIIII", 0xFEEDFACF, 0x100000C, 0, 2, len(commands),
                          sum(map(len, commands)), 0x200085, 0)
     data = bytearray(header + b"".join(commands))

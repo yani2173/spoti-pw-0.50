@@ -3,10 +3,12 @@ import hashlib
 import importlib.util
 import json
 import plistlib
+import struct
 import tempfile
 import unittest
 import zipfile
 from pathlib import Path
+from test_official_pipeline import executable
 
 ROOT = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location("official_kit", ROOT / "scripts/prepare-official-kit.py")
@@ -54,10 +56,10 @@ class OfficialKitTests(unittest.TestCase):
         self.write_ipa()
         self.write_kit()
 
-    def write_ipa(self, extras=None):
+    def write_ipa(self, extras=None, binary=None):
         with zipfile.ZipFile(self.ipa, "w") as archive:
             archive.writestr(self.app + "Info.plist", plistlib.dumps(self.info, fmt=plistlib.FMT_BINARY))
-            archive.writestr(self.app + "Spotify", b"test executable")
+            archive.writestr(self.app + "Spotify", executable() if binary is None else binary)
             for name, contents in (extras or {}).items():
                 archive.writestr(name, contents)
 
@@ -109,6 +111,17 @@ class OfficialKitTests(unittest.TestCase):
         self.write_ipa({self.app + "Frameworks/spotifyglass.dylib": b"old mod"})
         with self.assertRaisesRegex(ValueError, "clean decrypted"):
             self.prepare()
+
+    def test_existing_performance_addon_is_rejected(self):
+        self.write_ipa({self.app + "Frameworks/SGPerformance050.dylib": b"old addon"})
+        with self.assertRaisesRegex(ValueError, "clean decrypted"):
+            self.prepare()
+
+    def test_encrypted_ipa_is_rejected_before_extraction(self):
+        self.write_ipa(binary=executable([struct.pack("<IIIIII", 0x2C, 24, 4096, 4, 1, 0)]))
+        with self.assertRaisesRegex(ValueError, "encrypted.*decrypted IPA"):
+            self.prepare()
+        self.assertFalse((self.folder / "prepared").exists())
 
     def test_multiple_payload_apps_are_rejected(self):
         self.write_ipa({"Payload/Other.app/Info.plist": plistlib.dumps(self.info)})

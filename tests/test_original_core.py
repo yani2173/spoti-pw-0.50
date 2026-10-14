@@ -1,11 +1,12 @@
 """Checks that an IPA cannot silently replace or alter the original release core."""
 import importlib.util
 import json
+import plistlib
 import tempfile
 import unittest
 import zipfile
 from pathlib import Path
-from test_official_pipeline import executable
+from test_official_pipeline import dylib_command, executable
 
 ROOT = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location("original_core", ROOT / "scripts/verify-official-build.py")
@@ -24,9 +25,15 @@ class OriginalCoreTests(unittest.TestCase):
             kit.writestr("kit.json", json.dumps({"version": "0.50.0"}))
             kit.writestr("files/Frameworks/spotifyglass.dylib", self.core)
 
-    def write_ipa(self, core=None, addon=False):
+    def write_ipa(self, core=None, addon=False, loads=None):
+        if loads is None:
+            loads = ["@rpath/SpotifyGlassAppGroups.dylib", "@rpath/spotifyglass.dylib"]
+            if addon:
+                loads.append("@rpath/SGPerformance050.dylib")
         with zipfile.ZipFile(self.ipa, "w") as built:
-            built.writestr("Payload/Spotify.app/Info.plist", b"fixture")
+            built.writestr("Payload/Spotify.app/Info.plist", plistlib.dumps({"CFBundleExecutable": "Spotify"}))
+            built.writestr("Payload/Spotify.app/Spotify", executable([dylib_command(path) for path in loads]))
+            built.writestr("Payload/Spotify.app/Frameworks/SpotifyGlassAppGroups.dylib", self.core)
             built.writestr("Payload/Spotify.app/Frameworks/spotifyglass.dylib", self.core if core is None else core)
             if addon:
                 built.writestr("Payload/Spotify.app/Frameworks/SGPerformance050.dylib", b"fixture addon")
@@ -53,6 +60,22 @@ class OriginalCoreTests(unittest.TestCase):
             verifier.verify(self.ipa, self.kit, optimized=True)
         self.write_ipa(addon=True)
         verifier.verify(self.ipa, self.kit, optimized=True)
+
+    def test_copying_addon_without_loading_it_is_rejected(self):
+        self.write_ipa(addon=True, loads=["@rpath/SpotifyGlassAppGroups.dylib", "@rpath/spotifyglass.dylib"])
+        with self.assertRaisesRegex(ValueError, "does not load all"):
+            verifier.verify(self.ipa, self.kit, optimized=True)
+
+    def test_loading_addon_before_original_core_is_rejected(self):
+        self.write_ipa(addon=True, loads=["@rpath/SpotifyGlassAppGroups.dylib",
+                                        "@rpath/SGPerformance050.dylib", "@rpath/spotifyglass.dylib"])
+        with self.assertRaisesRegex(ValueError, "must load after"):
+            verifier.verify(self.ipa, self.kit, optimized=True)
+
+    def test_missing_original_core_load_is_rejected(self):
+        self.write_ipa(loads=["@rpath/SpotifyGlassAppGroups.dylib"])
+        with self.assertRaisesRegex(ValueError, "does not load all"):
+            verifier.verify(self.ipa, self.kit)
 
 
 if __name__ == "__main__":

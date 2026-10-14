@@ -8,6 +8,9 @@ import sys
 import zipfile
 from pathlib import Path, PurePosixPath
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from sg_macho import validate_decrypted_executable
+
 VERSION = "0.50.0"
 KIT_SHA256 = "da81a22bbdb4a27a060bead23eb3ff0aa90a06e4f22cd44927f7f9bff161839f"
 
@@ -29,9 +32,10 @@ def read_host(ipa):
         app = roots[0][:-len("Info.plist")]
         info = plistlib.loads(archive.read(roots[0]))
         executable = info.get("CFBundleExecutable", "")
-        if not executable or "/" in executable or executable in (".", "..") or app + executable not in archive.namelist():
+        if not isinstance(executable, str) or not executable or "/" in executable or executable in (".", "..") or app + executable not in archive.namelist():
             raise ValueError("IPA has no valid main executable")
-        for dylib in ("spotifyglass.dylib", "SpotifyGlassAppGroups.dylib"):
+        validate_decrypted_executable(archive.read(app + executable))
+        for dylib in ("spotifyglass.dylib", "SpotifyGlassAppGroups.dylib", "SGPerformance050.dylib"):
             if app + "Frameworks/" + dylib in archive.namelist():
                 raise ValueError("Use a clean decrypted Spotify IPA, without an existing spoti.pw injection")
         return app, info
