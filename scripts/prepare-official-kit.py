@@ -9,7 +9,7 @@ import zipfile
 from pathlib import Path, PurePosixPath
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from sg_macho import validate_decrypted_executable
+from sg_macho import dylib_loads, validate_decrypted_executable
 
 VERSION = "0.51.0"
 KIT_SHA256 = "21587c2b9433e3482c8c0ca6c6e4c7325a4b2c76d69bed607dfb031791231bd8"
@@ -24,19 +24,29 @@ def verify_download(path, expected=KIT_SHA256):
 
 def read_host(ipa):
     with zipfile.ZipFile(ipa) as archive:
-        roots = [name for name in archive.namelist()
+        names = archive.namelist()
+        files = [name for name in names if not name.endswith("/")]
+        if len(files) != len(set(files)):
+            raise ValueError("IPA contains duplicate file entries")
+        names = set(names)
+        roots = [name for name in names
                  if len(PurePosixPath(name).parts) == 3 and name.startswith("Payload/")
                  and name.endswith(".app/Info.plist")]
         if len(roots) != 1:
             raise ValueError("IPA must contain exactly one Payload/*.app/Info.plist")
         app = roots[0][:-len("Info.plist")]
         info = plistlib.loads(archive.read(roots[0]))
+        if not isinstance(info, dict):
+            raise ValueError("IPA Info.plist must be a dictionary")
         executable = info.get("CFBundleExecutable", "")
-        if not isinstance(executable, str) or not executable or "/" in executable or executable in (".", "..") or app + executable not in archive.namelist():
+        if not isinstance(executable, str) or not executable or "/" in executable or executable in (".", "..") or app + executable not in names:
             raise ValueError("IPA has no valid main executable")
-        validate_decrypted_executable(archive.read(app + executable))
-        for dylib in ("spotifyglass.dylib", "SpotifyGlassAppGroups.dylib", "SGPerformance050.dylib", "SGPerformance051.dylib"):
-            if app + "Frameworks/" + dylib in archive.namelist():
+        main = archive.read(app + executable)
+        validate_decrypted_executable(main)
+        injected = {"spotifyglass.dylib", "SpotifyGlassAppGroups.dylib", "SGPerformance050.dylib", "SGPerformance051.dylib"}
+        loaded = {PurePosixPath(path).name for loads in dylib_loads(main) for path in loads}
+        for dylib in injected:
+            if dylib in loaded or app + "Frameworks/" + dylib in names:
                 raise ValueError("Use a clean decrypted Spotify IPA, without an existing spoti.pw injection")
         return app, info
 

@@ -108,6 +108,10 @@ NSNotificationName const UIApplicationDidBecomeActiveNotification = @"UIApplicat
 - (void)showClip:(id)clip;
 @end
 @implementation SGTestAnimatedCoverModel
+- (id)valueForKey:(NSString *)key {
+    require(![key isEqualToString:@"playing"], "cover policy does not need KVC property lookup or boxing");
+    return [super valueForKey:key];
+}
 - (void)didMoveToWindow { self.windowMoves++; }
 - (void)showClip:(id)clip { self.lastClip = clip; self.clipPlaying = self.playing; }
 @end
@@ -453,7 +457,9 @@ int main(int argc, const char *argv[]) {
         SGModRow *status = performance.rows[2];
         require([automatic.key isEqualToString:SGPerformanceAutomaticLightModeKey] && !automatic.defaultOn && automatic.changed && status.value,
                 "automatic mode is a separate default-off switch with an effective status");
+        NSArray *adoptedSections = root.sections;
         [root adopt:root.sections];
+        require(root.sections == adoptedSections, "already augmented settings retain the original array");
         require(root.sections.count == 3 && root.adoptions == 2, "re-adopting existing rows does not duplicate the sections");
         [root adopt:@[existing]];
         require(root.sections.count == 3 && root.adoptions == 3, "a rebuild regenerates the add-on sections once");

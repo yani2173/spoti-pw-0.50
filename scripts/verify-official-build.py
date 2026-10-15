@@ -9,36 +9,18 @@ import zipfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from sg_macho import dylib_loads, validate_decrypted_executable
+from sg_macho import dylib_loads, file_sections, validate_decrypted_executable
 
 
 def sections(data):
     if len(data) < 32 or struct.unpack_from("<I", data)[0] != 0xFEEDFACF:
         raise ValueError("Expected the official thin 64-bit Mach-O dylib")
-    count = struct.unpack_from("<I", data, 16)[0]
-    result, offset = {}, 32
-    for _ in range(count):
-        command, size = struct.unpack_from("<II", data, offset)
-        if size < 8 or offset + size > len(data):
-            raise ValueError("Invalid Mach-O load command")
-        if command == 0x19:
-            nsects = struct.unpack_from("<I", data, offset + 64)[0]
-            for i in range(nsects):
-                entry = offset + 72 + i * 80
-                if entry + 80 > offset + size:
-                    raise ValueError("Invalid Mach-O section table")
-                name, segment = struct.unpack_from("<16s16s", data, entry)
-                length = struct.unpack_from("<Q", data, entry + 40)[0]
-                start = struct.unpack_from("<I", data, entry + 48)[0]
-                flags = struct.unpack_from("<I", data, entry + 64)[0]
-                zero_fill = (flags & 0xFF) in (1, 12, 18)
-                if not zero_fill and start + length > len(data):
-                    raise ValueError("Mach-O section is outside the file")
-                key = (segment.rstrip(b"\0"), name.rstrip(b"\0"))
-                if key in result:
-                    raise ValueError("Duplicate Mach-O section")
-                result[key] = (length, flags, b"" if zero_fill else data[start:start + length])
-        offset += size
+    result = {}
+    for segment, name, start, length, flags, zero_fill in file_sections(data, "<"):
+        key = (segment, name)
+        if key in result:
+            raise ValueError("Duplicate Mach-O section")
+        result[key] = (length, flags, b"" if zero_fill else data[start:start + length])
     if not result:
         raise ValueError("Mach-O dylib has no sections")
     return result

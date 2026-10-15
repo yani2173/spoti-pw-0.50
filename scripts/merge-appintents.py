@@ -19,7 +19,9 @@ member = f"{app_dir}Metadata.appintents/extract.actionsdata"
 version = f"{app_dir}Metadata.appintents/version.json"
 
 with zipfile.ZipFile(ipa) as z:
-    theirs = json.loads(z.read(member)) if member in z.namelist() else None
+    names = set(z.namelist())
+    theirs = json.loads(z.read(member)) if member in names else None
+    has_version = version in names
 with open(os.path.join(ours, "extract.actionsdata")) as f:
     added = json.load(f)
 
@@ -30,7 +32,7 @@ with tempfile.TemporaryDirectory() as tmp:
     with open(os.path.join(tmp, member), "w") as f:
         json.dump(merged, f)
     entries = [member]
-    if theirs is None:
+    if not has_version:
         shutil.copy(os.path.join(ours, "version.json"), os.path.join(tmp, version))
         entries.append(version)
     subprocess.run(["zip", "-q", os.path.abspath(ipa), *entries], cwd=tmp, check=True)

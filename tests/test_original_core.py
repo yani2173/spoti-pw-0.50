@@ -2,6 +2,7 @@
 import importlib.util
 import json
 import plistlib
+import struct
 import tempfile
 import unittest
 import zipfile
@@ -53,6 +54,16 @@ class OriginalCoreTests(unittest.TestCase):
         self.write_ipa(b"a differently built source dylib")
         with self.assertRaisesRegex(ValueError, "Mach-O"):
             verifier.verify(self.ipa, self.kit)
+
+    def test_malformed_core_tables_are_rejected_with_bounded_reads(self):
+        inputs = [self.core[:40]]
+        for location, value in ((16, 1000), (20, 8), (36, 8), (96, 1000)):
+            data = bytearray(self.core)
+            struct.pack_into("<I", data, location, value)
+            inputs.append(data)
+        for data in inputs:
+            with self.subTest(size=len(data)), self.assertRaises(ValueError):
+                verifier.sections(data)
 
     def test_optimized_mode_requires_an_addon(self):
         self.write_ipa()

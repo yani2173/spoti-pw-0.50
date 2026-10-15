@@ -71,6 +71,7 @@ static void (*sg_invalidate)(id, SEL);
 static char sg_proxyKey;
 static char sg_lifetimeKey;
 static char sg_coverKey;
+static ptrdiff_t sg_coverPlayingOffset;
 static void (*sg_coverPlaying)(id, SEL, BOOL);
 static void (*sg_coverWindow)(id, SEL);
 static void (*sg_coverClip)(id, SEL, id);
@@ -108,12 +109,19 @@ static BOOL targetSuspended(SGPerfDisplayTarget *proxy) {
     return suspended() || ((sg_lightMode || sg_tracking) && proxy.takesLink);
 }
 
+static BOOL coverIsPlaying(id view) {
+    // Read the verified one-byte BOOL directly: KVC boxes an NSNumber and repeats
+    // property lookup during every policy sweep and clip handoff.
+    unsigned char playing;
+    memcpy(&playing, (__bridge const char *)view + sg_coverPlayingOffset, sizeof(playing));
+    return playing != 0;
+}
+
 static SGPerfCoverState *coverState(id view) {
     SGPerfCoverState *state = objc_getAssociatedObject(view, &sg_coverKey);
     if (!state) {
         state = [SGPerfCoverState new];
-        // The pinned class has a one-byte BOOL _playing ivar and default KVC ivar access.
-        state.requestedPlaying = [[view valueForKey:@"playing"] boolValue];
+        state.requestedPlaying = coverIsPlaying(view);
         objc_setAssociatedObject(view, &sg_coverKey, state, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         [sg_animatedCovers addObject:view];
     }
@@ -123,7 +131,7 @@ static SGPerfCoverState *coverState(id view) {
 static void applyCoverState(id view) {
     SGPerfCoverState *state = coverState(view);
     BOOL playing = state.requestedPlaying && !sg_lightMode && !decorativeSuspended();
-    if ([[view valueForKey:@"playing"] boolValue] != playing)
+    if (coverIsPlaying(view) != playing)
         sg_coverPlaying(view, NSSelectorFromString(@"setPlaying:"), playing);
 }
 
@@ -302,13 +310,17 @@ static void refreshLightMode(void) {
 }
 
 void SGSetLightMode(BOOL on) {
-    [NSUserDefaults.standardUserDefaults setBool:on forKey:SGPerformanceLightModeKey];
+    NSUserDefaults *store = NSUserDefaults.standardUserDefaults;
+    if ([store boolForKey:SGPerformanceLightModeKey] != on)
+        [store setBool:on forKey:SGPerformanceLightModeKey];
     if (NSThread.isMainThread) refreshLightMode();
     else dispatch_async(dispatch_get_main_queue(), ^{ refreshLightMode(); });
 }
 
 void SGSetAutomaticLightMode(BOOL on) {
-    [NSUserDefaults.standardUserDefaults setBool:on forKey:SGPerformanceAutomaticLightModeKey];
+    NSUserDefaults *store = NSUserDefaults.standardUserDefaults;
+    if ([store boolForKey:SGPerformanceAutomaticLightModeKey] != on)
+        [store setBool:on forKey:SGPerformanceAutomaticLightModeKey];
     if (NSThread.isMainThread) refreshLightMode();
     else dispatch_async(dispatch_get_main_queue(), ^{ refreshLightMode(); });
 }
@@ -423,10 +435,10 @@ void SGInstallPerformance(void) {
         Ivar playing = class_getInstanceVariable(coverClass, "_playing");
         const char *type = playing ? ivar_getTypeEncoding(playing) : "";
         if (playing && type && (strcmp(type, "B") == 0 || strcmp(type, "c") == 0) &&
-            [coverClass accessInstanceVariablesDirectly] &&
             SGPerfHasMethod(coverClass, NSSelectorFromString(@"setPlaying:"), 'v', "B") &&
             SGPerfHasMethod(coverClass, NSSelectorFromString(@"didMoveToWindow"), 'v', "") &&
             SGPerfHasMethod(coverClass, NSSelectorFromString(@"showClip:"), 'v', "@")) {
+            sg_coverPlayingOffset = ivar_getOffset(playing);
             Method setter = class_getInstanceMethod(coverClass, NSSelectorFromString(@"setPlaying:"));
             Method window = class_getInstanceMethod(coverClass, NSSelectorFromString(@"didMoveToWindow"));
             Method clip = class_getInstanceMethod(coverClass, NSSelectorFromString(@"showClip:"));

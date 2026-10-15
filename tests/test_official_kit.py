@@ -7,8 +7,9 @@ import struct
 import tempfile
 import unittest
 import zipfile
+import warnings
 from pathlib import Path
-from test_official_pipeline import executable
+from test_official_pipeline import dylib_command, executable
 
 ROOT = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location("official_kit", ROOT / "scripts/prepare-official-kit.py")
@@ -130,6 +131,23 @@ class OfficialKitTests(unittest.TestCase):
         self.write_ipa({self.app + "Frameworks/SGPerformance051.dylib": b"old addon"})
         with self.assertRaisesRegex(ValueError, "clean decrypted"):
             self.prepare()
+
+    def test_removed_mod_files_with_remaining_load_commands_are_rejected(self):
+        for path in ("@rpath/spotifyglass.dylib", "@executable_path/Frameworks/SGPerformance051.dylib"):
+            with self.subTest(path=path):
+                self.write_ipa(binary=executable([dylib_command(path)]))
+                with self.assertRaisesRegex(ValueError, "clean decrypted"):
+                    self.prepare()
+                self.assertFalse((self.folder / "prepared").exists())
+
+    def test_duplicate_archive_members_are_rejected(self):
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", UserWarning)
+            with zipfile.ZipFile(self.ipa, "a") as archive:
+                archive.writestr(self.app + "Spotify", executable())
+        with self.assertRaisesRegex(ValueError, "duplicate file"):
+            self.prepare()
+        self.assertFalse((self.folder / "prepared").exists())
 
     def test_encrypted_ipa_is_rejected_before_extraction(self):
         self.write_ipa(binary=executable([struct.pack("<IIIIII", 0x2C, 24, 4096, 4, 1, 0)]))
