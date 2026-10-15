@@ -25,17 +25,20 @@ command -v ideviceinstaller >/dev/null || { echo "missing ideviceinstaller -> br
 # MediaRemote launches the now playing app by its application-identifier entitlement rather than by
 # CFBundleIdentifier, so tapping the lock screen card then asks for a bundle that does not exist and
 # nothing opens. A wildcard App ID needs no rewrite: the entitlement takes the IPA's own bundle id.
+command -v python3 >/dev/null || { echo "missing python3" >&2; exit 1; }
 PROFILE_PLIST="$(mktemp)"
+trap 'rm -f "$PROFILE_PLIST"' EXIT
 security cms -D -i "$SIGN_PROFILE" > "$PROFILE_PLIST" 2>/dev/null
-APP_ID="$(plutil -extract Entitlements.application-identifier raw -o - "$PROFILE_PLIST" 2>/dev/null || true)"
-rm -f "$PROFILE_PLIST"
-APP_ID="${APP_ID#*.}"
+APP_ID="$(python3 "$ROOT/scripts/signing-bundle-id.py" "$PROFILE_PLIST" "$IN")"
+# Keep the array nonempty: macOS Bash 3.2 treats empty arrays as unset under -u.
+INSTALL_ARGS=(install "$SIGNED")
+case "${WIFI:-0}" in
+  0) ;;
+  1) INSTALL_ARGS=(-n "${INSTALL_ARGS[@]}") ;;
+  *) echo "WIFI must be 0 or 1" >&2; exit 1 ;;
+esac
 
-sign() {  # sign [bundle id]
-  echo "==> signing${1:+ as $1}"
-  zsign -k "$SIGN_P12" -p "$SIGN_P12_PASSWORD" -m "$SIGN_PROFILE" ${1:+-b "$1"} -z 1 -o "$SIGNED" "$IN" >/dev/null
-}
-
-if [ -n "$APP_ID" ] && [ "$APP_ID" != "*" ]; then sign "$APP_ID"; else sign; fi
+echo "==> signing as $APP_ID"
+zsign -k "$SIGN_P12" -p "$SIGN_P12_PASSWORD" -m "$SIGN_PROFILE" -b "$APP_ID" -z 1 -o "$SIGNED" "$IN" >/dev/null
 echo "==> installing $SIGNED"
-ideviceinstaller ${WIFI:+-n} install "$SIGNED" 2>&1 | tail -3
+ideviceinstaller "${INSTALL_ARGS[@]}" 2>&1 | tail -3

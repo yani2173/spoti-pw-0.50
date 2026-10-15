@@ -149,6 +149,8 @@ class OfficialPipelineTests(unittest.TestCase):
                         self.assertEqual(extension["CFBundleShortVersionString"], version)
                         actions = json.loads(built.read(APP + "Metadata.appintents/extract.actionsdata"))["actions"]
                         self.assertIn("ExistingIntent", actions)
+                        self.assertEqual(json.loads(built.read(APP + "Metadata.appintents/version.json")),
+                                         json.loads(kit.read("appintents/version.json")))
                         self.assertEqual(len(actions), 1 + len(json.loads(kit.read("appintents/extract.actionsdata"))["actions"]))
                         self.assertFalse(any(name.startswith(APP + "Watch/") for name in built.namelist()))
 

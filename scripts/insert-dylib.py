@@ -1,48 +1,64 @@
 #!/usr/bin/env python3
-"""Adds an LC_LOAD_WEAK_DYLIB to a thin 64-bit Mach-O, in place, if it is not there yet.
+"""Add a weak dylib load to a thin arm64 Mach-O using verified header padding.
 
-  scripts/insert-dylib.py <binary> <install name, e.g. @rpath/X.dylib>
-
-The command goes into the free space between the load commands and the first section, which
-every Xcode-linked binary leaves. The signature is invalidated; the IPA is signed again later.
+The IPA must be signed again after this edit. Invalid input is rejected before writing.
 """
 import struct
 import sys
+from pathlib import Path
+
+from sg_macho import arm64_images, dylib_loads, file_sections, load_commands
 
 LC_LOAD_WEAK_DYLIB = 0x80000018
-LC_SEGMENT_64 = 0x19
 
-path, name = sys.argv[1:3]
-with open(path, "r+b") as f:
-    data = bytearray(f.read())
-    magic, _, _, _, ncmds, sizeofcmds, _, _ = struct.unpack_from("<IiiIIIII", data, 0)
-    if magic != 0xFEEDFACF:
-        sys.exit(f"{path}: not a thin 64-bit Mach-O")
 
-    first_section = len(data)
-    off = 32
-    for _ in range(ncmds):
-        cmd, cmdsize = struct.unpack_from("<II", data, off)
-        if (cmd & 0x7FFFFFFF) in (0xC, 0x18, 0x1F) and data[off + 24:off + cmdsize].split(b"\0")[0] == name.encode():
-            print(f"    {name} already loaded")
-            sys.exit(0)
-        if cmd == LC_SEGMENT_64:
-            nsects = struct.unpack_from("<I", data, off + 64)[0]
-            for s in range(nsects):
-                sect_off = struct.unpack_from("<I", data, off + 72 + s * 80 + 48)[0]
-                if sect_off:
-                    first_section = min(first_section, sect_off)
-        off += cmdsize
+def insert(data, name):
+    if not name or "\0" in name:
+        raise ValueError("Invalid dylib install name")
+    if data[:4] != b"\xcf\xfa\xed\xfe":
+        raise ValueError("Expected a thin little-endian arm64 Mach-O")
+    image, endian = arm64_images(data)[0]
+    commands = list(load_commands(image, endian))
+    sections = list(file_sections(image, endian))
+    # Parse the command's own string offset (not an assumed offset of 24), and
+    # recognize weak/re-export/lazy loads as well as ordinary LC_LOAD_DYLIB.
+    if name in dylib_loads(data)[0]:
+        return data, False
+    boundaries = [start for _, _, start, length, _, zero in sections if length and not zero]
+    for command, payload in commands:
+        if command == 0x19:
+            offset, size = struct.unpack_from("<QQ", payload, 40)
+            if offset + size > len(data):
+                raise ValueError("Mach-O segment is outside the file")
+            if offset and size:
+                boundaries.append(offset)
+    if not boundaries:
+        raise ValueError("Mach-O has no file-backed section or segment")
+    count, length = struct.unpack_from("<II", data, 16)
+    end = 32 + length
+    raw = name.encode("utf-8") + b"\0"
+    size = (24 + len(raw) + 7) & ~7
+    if end + size > min(boundaries) or any(data[end:end + size]):
+        raise ValueError("No room for another load command")
+    command = struct.pack("<IIIIII", LC_LOAD_WEAK_DYLIB, size, 24, 2, 0x10000, 0x10000) + raw
+    result = bytearray(data)
+    result[end:end + size] = command.ljust(size, b"\0")
+    struct.pack_into("<II", result, 16, count + 1, length + size)
+    return result, True
 
-    raw = name.encode() + b"\0"
-    cmdsize = (24 + len(raw) + 7) & ~7
-    end = 32 + sizeofcmds
-    if end + cmdsize > first_section or any(data[end:end + cmdsize]):
-        sys.exit(f"{path}: no room for another load command")
 
-    cmd = struct.pack("<IIIIII", LC_LOAD_WEAK_DYLIB, cmdsize, 24, 2, 0x10000, 0x10000) + raw
-    data[end:end + cmdsize] = cmd.ljust(cmdsize, b"\0")
-    struct.pack_into("<II", data, 16, ncmds + 1, sizeofcmds + cmdsize)
-    f.seek(0)
-    f.write(data)
-print(f"    {name} added")
+def main():
+    if len(sys.argv) != 3:
+        sys.exit("usage: insert-dylib.py <binary> <dylib install name>")
+    path, name = Path(sys.argv[1]), sys.argv[2]
+    try:
+        result, changed = insert(path.read_bytes(), name)
+        if changed:
+            path.write_bytes(result)
+        print(f"    {name} {'added' if changed else 'already loaded'}")
+    except (OSError, ValueError, struct.error) as error:
+        sys.exit(f"{path}: {error}")
+
+
+if __name__ == "__main__":
+    main()

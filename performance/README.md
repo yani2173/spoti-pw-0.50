@@ -72,8 +72,8 @@ Animated player covers use a separate weak view registry. `SGRPlayerAnimatedView
 40 in this release. Its `showClip:` (`0xfdd90`) reads that flag at `0xfde88` before setting the new
 clip's playback, so the add-on clamps it before a new clip is shown. `didMoveToWindow` (`0xfd6ac`)
 also registers views. Requested playback is kept separately and restored when allowed; owner-paused
-covers stay paused and inactive apps cannot restart them. The class/ivar/method signatures and KVC
-ivar access are checked before hooking. Nothing in the audio playback engine is changed.
+covers stay paused and inactive apps cannot restart them. The class/ivar/method signatures are checked before hooking. The verified one-byte playing
+flag is read using its runtime ivar offset, avoiding KVC lookup and NSNumber boxing during policy sweeps. Nothing in the audio playback engine is changed.
 
 The settings ABI evidence is `SGModPage.adopt:` (`0x15b4e8`, `v24@0:8@16`), invoked after the
 title is set by `initWithTitle:intro:sections:footer:` (`0x15b314`). `initWithTitle:build:` and
@@ -274,3 +274,25 @@ They verify work suppression and recovery, not actual UIKit scrolling, device FP
 particular phone's lag. Test Queue drags and inertial flings on an iPhone with Light mode off; confirm
 both smooth scrolling and restored effects afterward. These changes reduce competing decorative
 work but do not establish whether Queue cell layout or image loading also contributes to stutter.
+
+
+## Runtime and packaging review
+
+Re-adopting settings that already contain Performance and attribution forwards the original array.
+Switch callbacks skip redundant defaults writes when the native row already saved the same value;
+policy refresh still runs, including on the main queue for off-main calls. Animated-cover state uses
+its verified runtime BOOL offset rather than repeated KVC lookups. Existing lifecycle and ABI tests
+cover these changes; there is no claimed measured FPS improvement from these small reductions.
+
+Mach-O insertion and verification share bounded command/section parsing. The injector recognizes
+existing loads at their encoded string offset, including weak, re-export and lazy loads, and refuses
+truncated tables, out-of-file sections or occupied header padding before modifying a widget. IPA
+preparation caches archive names and the main executable, rejects duplicate files and detects old
+mod load commands even if their dylib files were removed. App Intents merging now fills a missing
+version file while preserving an existing one. The real-kit matrix validates the resulting package.
+
+The local install script resolves explicit, full-wildcard and prefix-wildcard provisioning profiles
+to a concrete compatible bundle ID. A mismatched wildcard fails before signing instead of passing
+an asterisk as the app ID. Profile decoding failures are fatal and temporary decoded profiles are
+cleaned up; `WIFI=0` uses USB and `WIFI=1` uses Wi-Fi. Signing credentials and physical installation
+are not exercised in automated tests.

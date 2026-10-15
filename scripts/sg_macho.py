@@ -44,6 +44,8 @@ def arm64_images(data):
 
 
 def load_commands(image, endian):
+    if len(image) < 32:
+        raise ValueError("Truncated Mach-O header")
     count, length = struct.unpack_from(endian + "II", image, 16)
     end = 32 + length
     if end > len(image) or count > length // 8:
@@ -53,12 +55,34 @@ def load_commands(image, endian):
         if offset + 8 > end:
             raise ValueError("Truncated Mach-O load command")
         command, size = struct.unpack_from(endian + "II", image, offset)
-        if size < 8 or offset + size > end:
+        if size < 8 or size % 8 or offset + size > end:
             raise ValueError("Invalid Mach-O load command")
         yield command, image[offset:offset + size]
         offset += size
     if offset != end:
         raise ValueError("Mach-O load command count/size mismatch")
+
+
+def file_sections(image, endian):
+    """Validated section records, including zero-fill sections with no file bytes."""
+    for command, payload in load_commands(image, endian):
+        if command != 0x19:
+            continue
+        if len(payload) < 72:
+            raise ValueError("Truncated Mach-O segment command")
+        count = struct.unpack_from(endian + "I", payload, 64)[0]
+        if len(payload) != 72 + count * 80:
+            raise ValueError("Invalid Mach-O section table")
+        for i in range(count):
+            entry = 72 + i * 80
+            name, segment = struct.unpack_from(endian + "16s16s", payload, entry)
+            length = struct.unpack_from(endian + "Q", payload, entry + 40)[0]
+            start = struct.unpack_from(endian + "I", payload, entry + 48)[0]
+            flags = struct.unpack_from(endian + "I", payload, entry + 64)[0]
+            zero_fill = (flags & 0xFF) in (1, 12, 18)
+            if not zero_fill and start + length > len(image):
+                raise ValueError("Mach-O section is outside the file")
+            yield segment.rstrip(b"\0"), name.rstrip(b"\0"), start, length, flags, zero_fill
 
 
 def validate_decrypted_executable(data):

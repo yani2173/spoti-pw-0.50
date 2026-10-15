@@ -54,6 +54,10 @@ static void adoptSections(id<SGPerfSettingsPage> page, SEL cmd, NSArray *section
             if (objc_getAssociatedObject(row, &sg_creditKey)) hasCredit = YES;
         }
     }
+    if (hasLightMode && hasCredit) {
+        sg_adopt(page, cmd, sections);
+        return;
+    }
     NSMutableArray *augmented = [sections mutableCopy];
     if (!hasLightMode) {
         id<SGPerfSettingsRow> row = [sg_rowClass new];
