@@ -85,6 +85,7 @@ class InstallScriptTests(unittest.TestCase):
                     bundle = args[args.index("-b") + 1]
                     self.assertEqual(bundle, "custom.spotify" if identifier == "TEAM.custom.spotify" else "com.spotify.client")
                     self.assertEqual(args[-1], str(source))
+                    self.assertTrue((folder / "calls-ideviceinstaller").exists(), result.stdout + result.stderr)
                     install = json.loads((folder / "calls-ideviceinstaller").read_text())
                     self.assertEqual("-n" in install, wifi == "1")
                 self.assertFalse(list(folder.glob("tmp.*")), "decoded profile temporary file is cleaned up")

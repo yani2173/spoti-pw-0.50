@@ -30,14 +30,15 @@ PROFILE_PLIST="$(mktemp)"
 trap 'rm -f "$PROFILE_PLIST"' EXIT
 security cms -D -i "$SIGN_PROFILE" > "$PROFILE_PLIST" 2>/dev/null
 APP_ID="$(python3 "$ROOT/scripts/signing-bundle-id.py" "$PROFILE_PLIST" "$IN")"
-INSTALL_ARGS=()
+# Keep the array nonempty: macOS Bash 3.2 treats empty arrays as unset under -u.
+INSTALL_ARGS=(install "$SIGNED")
 case "${WIFI:-0}" in
   0) ;;
-  1) INSTALL_ARGS+=(-n) ;;
+  1) INSTALL_ARGS=(-n "${INSTALL_ARGS[@]}") ;;
   *) echo "WIFI must be 0 or 1" >&2; exit 1 ;;
 esac
 
 echo "==> signing as $APP_ID"
 zsign -k "$SIGN_P12" -p "$SIGN_P12_PASSWORD" -m "$SIGN_PROFILE" -b "$APP_ID" -z 1 -o "$SIGNED" "$IN" >/dev/null
 echo "==> installing $SIGNED"
-ideviceinstaller "${INSTALL_ARGS[@]}" install "$SIGNED" 2>&1 | tail -3
+ideviceinstaller "${INSTALL_ARGS[@]}" 2>&1 | tail -3
