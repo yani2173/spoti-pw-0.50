@@ -113,7 +113,8 @@ static BOOL coverIsPlaying(id view) {
     // Read the verified one-byte BOOL directly: KVC boxes an NSNumber and repeats
     // property lookup during every policy sweep and clip handoff.
     unsigned char playing;
-    memcpy(&playing, (__bridge const char *)view + sg_coverPlayingOffset, sizeof(playing));
+    const char *bytes = (__bridge const void *)view;
+    memcpy(&playing, bytes + sg_coverPlayingOffset, sizeof(playing));
     return playing != 0;
 }
 
