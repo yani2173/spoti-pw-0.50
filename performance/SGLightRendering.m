@@ -12,7 +12,7 @@
 @implementation SGLightVisualizerState
 @end
 
-static BOOL light, appInactive, playerTransition;
+static BOOL light, appInactive, interactionSuspended;
 static NSHashTable *visualizers;
 static char visualizerKey;
 static void (*setRunningOriginal)(id, SEL, BOOL);
@@ -30,7 +30,7 @@ static SGLightVisualizerState *visualizerState(id<SGLightVisualizer> view) {
 }
 
 static BOOL requestedRun(id view) {
-    return visualizerState(view).requestedRunning && !light && !appInactive && !playerTransition;
+    return visualizerState(view).requestedRunning && !light && !appInactive && !interactionSuspended;
 }
 
 static void applyVisualizer(id<SGLightVisualizer> view) {
@@ -41,7 +41,7 @@ static void applyVisualizer(id<SGLightVisualizer> view) {
 static void setVisualizerRunning(id view, SEL cmd, BOOL run) {
     if (NSThread.isMainThread) {
         visualizerState(view).requestedRunning = run;
-        run = run && !light && !appInactive && !playerTransition;
+        run = run && !light && !appInactive && !interactionSuspended;
     }
     setRunningOriginal(view, cmd, run);
 }
@@ -59,12 +59,12 @@ static void updateVisualizerLink(id<SGLightVisualizer> view, SEL cmd) {
     updateLinkOriginal(view, cmd);
 }
 
-void SGApplyLightRendering(BOOL lightMode, BOOL inactive, BOOL transitioning) {
+void SGApplyLightRendering(BOOL lightMode, BOOL inactive, BOOL interactionBusy) {
     if (!NSThread.isMainThread) return;
-    if (light == lightMode && appInactive == inactive && playerTransition == transitioning) return;
+    if (light == lightMode && appInactive == inactive && interactionSuspended == interactionBusy) return;
     light = lightMode;
     appInactive = inactive;
-    playerTransition = transitioning;
+    interactionSuspended = interactionBusy;
     for (id view in visualizers.allObjects) applyVisualizer(view);
 }
 
@@ -92,13 +92,13 @@ static void installBoolAnimation(Class cls, NSString *name) {
     SGPerfReplaceMethod(cls, selector, wrapper);
 }
 
-void SGInstallLightRendering(BOOL lightMode, BOOL inactive, BOOL transitioning) {
+void SGInstallLightRendering(BOOL lightMode, BOOL inactive, BOOL interactionBusy) {
     if (!NSThread.isMainThread) return;
     static dispatch_once_t once;
     dispatch_once(&once, ^{
         light = lightMode;
         appInactive = inactive;
-        playerTransition = transitioning;
+        interactionSuspended = interactionBusy;
         visualizers = [NSHashTable weakObjectsHashTable];
         Class visualizer = NSClassFromString(@"SGVisualizerView");
         if (SGPerfHasMethod(visualizer, sel_registerName("running"), 'B', "") &&

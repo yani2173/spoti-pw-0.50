@@ -5,6 +5,7 @@
 #import "SGLyricsTiming.h"
 #import <objc/message.h>
 #import <objc/runtime.h>
+#import <CoreFoundation/CoreFoundation.h>
 #include <stdatomic.h>
 #ifdef SG_PERFORMANCE_TEST
 #import "../tests/PerformanceUIKitStubs.h"
@@ -50,6 +51,9 @@
 
 static BOOL sg_inactive;
 static BOOL sg_transitioning;
+static BOOL sg_tracking;
+static NSUInteger sg_trackingDepth;
+static CFRunLoopTimerRef sg_trackingRecovery;
 static BOOL sg_lightMode;
 static BOOL sg_manualLightMode;
 static BOOL sg_automaticLightMode;
@@ -74,6 +78,7 @@ static atomic_uint_fast64_t sg_activityGeneration;
 static atomic_uint_fast64_t sg_transitionGeneration;
 
 static BOOL suspended(void) { return sg_inactive || sg_transitioning; }
+static BOOL decorativeSuspended(void) { return suspended() || sg_tracking; }
 
 NSString *const SGPerformanceLightModeKey = @"spotifyglass.performance.lightMode";
 NSString *const SGPerformanceAutomaticLightModeKey = @"spotifyglass.performance.automaticLightMode";
@@ -100,7 +105,7 @@ NSString *SGPerformanceLightModeStatus(void) {
 }
 
 static BOOL targetSuspended(SGPerfDisplayTarget *proxy) {
-    return suspended() || (sg_lightMode && proxy.takesLink);
+    return suspended() || ((sg_lightMode || sg_tracking) && proxy.takesLink);
 }
 
 static SGPerfCoverState *coverState(id view) {
@@ -117,7 +122,7 @@ static SGPerfCoverState *coverState(id view) {
 
 static void applyCoverState(id view) {
     SGPerfCoverState *state = coverState(view);
-    BOOL playing = state.requestedPlaying && !sg_lightMode && !suspended();
+    BOOL playing = state.requestedPlaying && !sg_lightMode && !decorativeSuspended();
     if ([[view valueForKey:@"playing"] boolValue] != playing)
         sg_coverPlaying(view, NSSelectorFromString(@"setPlaying:"), playing);
 }
@@ -125,7 +130,7 @@ static void applyCoverState(id view) {
 static void setCoverPlaying(id view, SEL cmd, BOOL playing) {
     if (!NSThread.isMainThread) { sg_coverPlaying(view, cmd, playing); return; }
     coverState(view).requestedPlaying = playing;
-    sg_coverPlaying(view, cmd, playing && !sg_lightMode && !suspended());
+    sg_coverPlaying(view, cmd, playing && !sg_lightMode && !decorativeSuspended());
 }
 
 static void coverMovedToWindow(id view, SEL cmd) {
@@ -221,6 +226,54 @@ static void invalidateLink(id link, SEL cmd) {
         objc_setAssociatedObject(link, &sg_proxyKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 }
 
+// UIKit tracks scroll/drag interaction in this public run-loop mode. Observe it once,
+// rather than replacing Spotify's scroll delegates or traversing views on every frame.
+static void setTracking(BOOL tracking) {
+    if (sg_tracking == tracking) return;
+    sg_tracking = tracking;
+    SGApplyLightRendering(sg_lightMode, sg_inactive, sg_transitioning || sg_tracking);
+    for (id view in sg_animatedCovers.allObjects) applyCoverState(view);
+    for (SGPerfDisplayTarget *target in sg_targets.allObjects) applyState(target);
+}
+
+static void installTrackingObserver(void) {
+    CFRunLoopRef loop = CFRunLoopGetMain();
+    CFRunLoopObserverRef observer = CFRunLoopObserverCreateWithHandler(kCFAllocatorDefault,
+        kCFRunLoopEntry | kCFRunLoopExit, true, 0,
+        ^(CFRunLoopObserverRef observation, CFRunLoopActivity activity) {
+            (void)observation;
+            if (activity == kCFRunLoopEntry) {
+                ++sg_trackingDepth;
+                setTracking(YES);
+                return;
+            }
+            if (sg_trackingDepth) --sg_trackingDepth;
+            if (sg_trackingDepth) return;
+            // Tracking loops can exit between input events. A single default-mode timer
+            // coalesces those exits and waits for 120 ms of settled interaction. It cannot
+            // run in tracking mode, and nested default loops cannot resume an outer drag.
+            CFAbsoluteTime deadline = CFAbsoluteTimeGetCurrent() + 0.12;
+            if (sg_trackingRecovery) {
+                CFRunLoopTimerSetNextFireDate(sg_trackingRecovery, deadline);
+                return;
+            }
+            sg_trackingRecovery = CFRunLoopTimerCreateWithHandler(kCFAllocatorDefault,
+                deadline, 0, 0, 0, ^(CFRunLoopTimerRef timer) {
+                    (void)timer;
+                    CFRelease(sg_trackingRecovery);
+                    sg_trackingRecovery = NULL;
+                    if (!sg_trackingDepth) setTracking(NO);
+                    // Otherwise the outer tracking exit schedules recovery again.
+                });
+            if (sg_trackingRecovery)
+                CFRunLoopAddTimer(loop, sg_trackingRecovery, kCFRunLoopDefaultMode);
+            else setTracking(NO);
+        });
+    if (!observer) return;
+    CFRunLoopAddObserver(loop, observer, (__bridge CFStringRef)UITrackingRunLoopMode);
+    CFRelease(observer); // The run loop owns the observer for the process lifetime.
+}
+
 static void refreshLightMode(void);
 
 static void setActive(BOOL active) {
@@ -231,7 +284,7 @@ static void setActive(BOOL active) {
         sg_transitioning = NO;
         atomic_fetch_add_explicit(&sg_transitionGeneration, 1, memory_order_relaxed);
     }
-    SGApplyLightRendering(sg_lightMode, sg_inactive, sg_transitioning);
+    SGApplyLightRendering(sg_lightMode, sg_inactive, sg_transitioning || sg_tracking);
     // A setter observer can create another link. Enumerate a snapshot so re-entrancy is safe.
     // Read the current state for each link. A setter observer can post another app notification;
     // the latest notification must win for the remainder of this snapshot too.
@@ -243,7 +296,7 @@ static void refreshLightMode(void) {
     BOOL on = desiredLightMode();
     if (on == sg_lightMode) return;
     sg_lightMode = on;
-    SGApplyLightRendering(sg_lightMode, sg_inactive, sg_transitioning);
+    SGApplyLightRendering(sg_lightMode, sg_inactive, sg_transitioning || sg_tracking);
     for (SGPerfDisplayTarget *target in sg_targets.allObjects) applyState(target);
     for (id view in sg_animatedCovers.allObjects) applyCoverState(view);
 }
@@ -265,7 +318,7 @@ static void notificationTransition(BOOL transitioning) {
     void (^apply)(void) = ^{
         if (atomic_load_explicit(&sg_transitionGeneration, memory_order_relaxed) != generation) return;
         sg_transitioning = transitioning && !sg_inactive;
-        SGApplyLightRendering(sg_lightMode, sg_inactive, sg_transitioning);
+        SGApplyLightRendering(sg_lightMode, sg_inactive, sg_transitioning || sg_tracking);
         for (id view in sg_animatedCovers.allObjects) applyCoverState(view);
         for (SGPerfDisplayTarget *target in sg_targets.allObjects) applyState(target);
         if (sg_transitioning) {
@@ -274,7 +327,7 @@ static void notificationTransition(BOOL transitioning) {
             dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 10 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
                 if (atomic_load_explicit(&sg_transitionGeneration, memory_order_relaxed) != generation) return;
                 sg_transitioning = NO;
-                SGApplyLightRendering(sg_lightMode, sg_inactive, sg_transitioning);
+                SGApplyLightRendering(sg_lightMode, sg_inactive, sg_transitioning || sg_tracking);
                 for (id view in sg_animatedCovers.allObjects) applyCoverState(view);
                 for (SGPerfDisplayTarget *target in sg_targets.allObjects) applyState(target);
             });
@@ -384,7 +437,8 @@ void SGInstallPerformance(void) {
             SGPerfReplaceMethod(coverClass, NSSelectorFromString(@"didMoveToWindow"), (IMP)coverMovedToWindow);
             SGPerfReplaceMethod(coverClass, NSSelectorFromString(@"showClip:"), (IMP)showCoverClip);
         }
-        SGInstallLightRendering(sg_lightMode, sg_inactive, sg_transitioning);
+        SGInstallLightRendering(sg_lightMode, sg_inactive, sg_transitioning || sg_tracking);
+        installTrackingObserver();
         SGInstallLyricsTiming();
         SGInstallPerformanceSettings();
         NSLog(@"[spoti-perf] 0.51.0: lyrics lifecycle and player-transition suspension installed");
