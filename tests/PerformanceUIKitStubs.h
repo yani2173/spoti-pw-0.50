@@ -13,6 +13,7 @@
 typedef NS_ENUM(NSInteger, UIApplicationState) {
     UIApplicationStateActive, UIApplicationStateInactive, UIApplicationStateBackground
 };
+extern NSRunLoopMode const UITrackingRunLoopMode;
 extern NSNotificationName const UIApplicationWillResignActiveNotification;
 extern NSNotificationName const UIApplicationDidBecomeActiveNotification;
 @interface UIApplication : NSObject

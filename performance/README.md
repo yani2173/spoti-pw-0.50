@@ -246,3 +246,31 @@ not iOS rendering, device FPS or Spotify audio. Install the optional emulator lo
 Transition regressions additionally cover normal-mode analysis/video shutdown, clips created or
 resumed mid-transition, owner pauses, inactive interruptions and recovery. The existing generation-
 checked transition-end/timeout logic applies the same policy to covers and visualizer inputs.
+
+
+## Normal-mode scrolling
+
+Previously normal mode suspended decoration only for player transitions and app inactivity.
+UIKit tracking (for example dragging the Queue list) could still compete with moving-background
+rendering, animated player covers and visualizer analysis/video inputs behind the list.
+
+The add-on now observes the main run loop's public `UITrackingRunLoopMode` entry/exit events.
+On entry it pauses only the existing verified decorative renderers. The visualizer uses its original
+stop path, including its input consumers. Lyrics timing, Spotify's own display links, audio, scroll
+physics, selected Light mode and original frame-rate requests are unchanged. Other UIKit gestures
+using this tracking mode also receive the temporary reduction; it is not specific to Queue.
+No Spotify scroll delegates or private Queue selectors are replaced.
+
+A single nonrepeating timer in the default run-loop mode restores requested rendering after 120 ms
+without another tracking exit. Repeated passes postpone the same timer instead of starting/stopping
+processing between input events. It cannot fire in tracking mode. A nesting counter also prevents a
+nested default-mode loop from restoring effects while an outer tracking loop is active. There is no
+polling or view-tree traversal. New renderers and owner requests during tracking obey the same policy.
+Recovery preserves owner stops, transitions, app inactivity and manual/automatic Light mode.
+
+The macOS integration tests run actual CoreFoundation tracking/default loops with UIKit stand-ins,
+including repeated passes, nested loops, short gaps, new renderers and overlapping suspension causes.
+They verify work suppression and recovery, not actual UIKit scrolling, device FPS or the cause of a
+particular phone's lag. Test Queue drags and inertial flings on an iPhone with Light mode off; confirm
+both smooth scrolling and restored effects afterward. These changes reduce competing decorative
+work but do not establish whether Queue cell layout or image loading also contributes to stutter.

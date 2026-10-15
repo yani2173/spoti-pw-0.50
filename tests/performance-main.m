@@ -2,6 +2,7 @@
 #import "../performance/SGPerformance.h"
 #import <objc/message.h>
 #import <objc/runtime.h>
+#import <CoreFoundation/CoreFoundation.h>
 
 static void require(BOOL condition, const char *message);
 static BOOL nilFactory;
@@ -13,6 +14,7 @@ static BOOL nilFactory;
     return process;
 }
 @end
+NSRunLoopMode const UITrackingRunLoopMode = @"UITrackingRunLoopMode";
 NSNotificationName const UIApplicationWillResignActiveNotification = @"UIApplicationWillResignActiveNotification";
 NSNotificationName const UIApplicationDidBecomeActiveNotification = @"UIApplicationDidBecomeActiveNotification";
 @implementation UIApplication
@@ -146,6 +148,23 @@ static void require(BOOL condition, const char *message) {
 }
 static void notify(NSNotificationName name) {
     [NSNotificationCenter.defaultCenter postNotificationName:name object:nil];
+}
+// Exercise real CoreFoundation mode entry/exit and timer delivery, not a fake scroll flag.
+static void track(void (^body)(void)) {
+    CFRunLoopRef loop = CFRunLoopGetMain();
+    CFRunLoopTimerRef input = CFRunLoopTimerCreateWithHandler(kCFAllocatorDefault,
+        CFAbsoluteTimeGetCurrent(), 0, 0, 0, ^(CFRunLoopTimerRef timer) {
+            (void)timer;
+            body();
+            CFRunLoopStop(loop);
+        });
+    CFRunLoopAddTimer(loop, input, (__bridge CFStringRef)UITrackingRunLoopMode);
+    CFRunLoopRunInMode((__bridge CFStringRef)UITrackingRunLoopMode, 1, false);
+    CFRunLoopTimerInvalidate(input);
+    CFRelease(input);
+}
+static void settle(void) {
+    [NSRunLoop.currentRunLoop runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.2]];
 }
 int main(int argc, const char *argv[]) {
     @autoreleasepool {
@@ -449,6 +468,95 @@ int main(int argc, const char *argv[]) {
         SGVisualizerView *nativeVisualizer = [SGVisualizerView new];
         nativeVisualizer.running = YES;
         require(nativeVisualizer.processing, "normal visualizer processing is initially enabled");
+        __block CADisplayLink *scrollGpu;
+        __block SGRPlayerAnimatedView *scrollCover;
+        __block SGVisualizerView *scrollVisualizer;
+        __block NSUInteger scrollPauseWrites = 0;
+        warpLink.pauseObserver = ^(BOOL paused) { (void)paused; ++scrollPauseWrites; };
+        track(^{}); // Leave a pending recovery before the nested-loop regression.
+        track(^{
+            require(warpLink.isPaused && !cover.playing && !nativeVisualizer.processing,
+                    "normal-mode scrolling stops decorative GPU, video and analysis work");
+            require(!reentrant.link.isPaused && !untouched.isPaused,
+                    "scrolling preserves lyric timing and unrelated display links");
+            require([SGPerformanceLightModeStatus() isEqualToString:@"Normal"],
+                    "scrolling does not change the selected Light mode or status");
+            warpLink.paused = NO;
+            cover.playing = YES;
+            [cover showClip:@"during-scroll"];
+            nativeVisualizer.running = YES;
+            require(warpLink.isPaused && !cover.clipPlaying && !nativeVisualizer.processing,
+                    "new owner requests cannot bypass scrolling suspension");
+            scrollGpu = [CADisplayLink displayLinkWithTarget:warp selector:@selector(tick:)];
+            scrollCover = [SGRPlayerAnimatedView new];
+            scrollCover.playing = YES;
+            scrollVisualizer = [SGVisualizerView new];
+            scrollVisualizer.running = YES;
+            require(scrollGpu.isPaused && !scrollCover.playing && !scrollVisualizer.processing,
+                    "renderers created during a scroll start suspended");
+            track(^{ require(warpLink.isPaused, "nested tracking stays suspended"); });
+            settle(); // Deliberately run a nested default loop past the recovery deadline.
+            require(warpLink.isPaused && !cover.playing, "nested default mode cannot resume an outer gesture");
+        });
+        NSUInteger writesAfterFirstScroll = scrollPauseWrites;
+        for (NSUInteger i = 0; i < 30; ++i) track(^{
+            require(warpLink.isPaused, "successive tracking passes remain suspended");
+        });
+        require(scrollPauseWrites == writesAfterFirstScroll,
+                "tracking passes do not repeatedly stop and start the same renderer");
+        [NSRunLoop.currentRunLoop runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.02]];
+        require(warpLink.isPaused, "a brief default-mode gap does not restart heavy rendering");
+        settle();
+        require(!warpLink.isPaused && cover.playing && nativeVisualizer.processing &&
+                !scrollGpu.isPaused && scrollCover.playing && scrollVisualizer.processing,
+                "settled scrolling restores requested rendering, including late views");
+        require(visualizerLink.isPaused && !pausedCover.playing && warpLink.preferredFramesPerSecond == 120,
+                "scroll recovery preserves owner pauses and the original frame rate");
+        warpLink.pauseObserver = nil;
+        track(^{
+            cover.playing = NO;
+            nativeVisualizer.running = NO;
+            scrollGpu.paused = YES;
+        });
+        settle();
+        require(!cover.playing && !nativeVisualizer.processing && scrollGpu.isPaused,
+                "owner stops made during scrolling survive recovery");
+        cover.playing = YES;
+        nativeVisualizer.running = YES;
+        track(^{ notify(@"spotifyglass.playerTransition"); });
+        settle();
+        require(warpLink.isPaused && !cover.playing && !nativeVisualizer.processing,
+                "scroll recovery cannot end a player transition");
+        notify(@"spotifyglass.playerTransitionEnded");
+        track(^{
+            notify(@"spotifyglass.playerTransition");
+            notify(@"spotifyglass.playerTransitionEnded");
+            require(warpLink.isPaused, "transition completion cannot end scroll suspension");
+            notify(UIApplicationWillResignActiveNotification);
+        });
+        settle();
+        require(warpLink.isPaused && !cover.playing && !nativeVisualizer.processing,
+                "scroll recovery cannot restart an inactive app");
+        notify(UIApplicationDidBecomeActiveNotification);
+        require(!warpLink.isPaused && cover.playing && nativeVisualizer.processing,
+                "foreground recovery resumes after a settled interrupted scroll");
+        track(^{ SGSetLightMode(YES); });
+        settle();
+        require(warpLink.isPaused && !cover.playing && !nativeVisualizer.processing,
+                "scroll recovery cannot override Light mode enabled mid-gesture");
+        SGSetLightMode(NO);
+        track(^{
+            SGSetLightMode(YES);
+            SGSetLightMode(NO);
+            require(warpLink.isPaused && !cover.playing, "disabling Light mode cannot bypass scrolling");
+        });
+        settle();
+        require(!warpLink.isPaused && cover.playing && nativeVisualizer.processing,
+                "all temporary policy overlaps recover without leaving effects stuck");
+        [scrollGpu invalidate];
+        scrollCover = nil;
+        scrollVisualizer = nil;
+
         notify(@"spotifyglass.playerTransition");
         require(!cover.playing && !nativeVisualizer.processing, "normal player transitions pause animated covers and visualizer inputs");
         cover.playing = YES;
