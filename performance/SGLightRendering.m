@@ -12,7 +12,7 @@
 @implementation SGLightVisualizerState
 @end
 
-static BOOL light, appInactive;
+static BOOL light, appInactive, playerTransition;
 static NSHashTable *visualizers;
 static char visualizerKey;
 static void (*setRunningOriginal)(id, SEL, BOOL);
@@ -30,7 +30,7 @@ static SGLightVisualizerState *visualizerState(id<SGLightVisualizer> view) {
 }
 
 static BOOL requestedRun(id view) {
-    return visualizerState(view).requestedRunning && !light && !appInactive;
+    return visualizerState(view).requestedRunning && !light && !appInactive && !playerTransition;
 }
 
 static void applyVisualizer(id<SGLightVisualizer> view) {
@@ -41,7 +41,7 @@ static void applyVisualizer(id<SGLightVisualizer> view) {
 static void setVisualizerRunning(id view, SEL cmd, BOOL run) {
     if (NSThread.isMainThread) {
         visualizerState(view).requestedRunning = run;
-        run = run && !light && !appInactive;
+        run = run && !light && !appInactive && !playerTransition;
     }
     setRunningOriginal(view, cmd, run);
 }
@@ -59,11 +59,12 @@ static void updateVisualizerLink(id<SGLightVisualizer> view, SEL cmd) {
     updateLinkOriginal(view, cmd);
 }
 
-void SGApplyLightRendering(BOOL lightMode, BOOL inactive) {
+void SGApplyLightRendering(BOOL lightMode, BOOL inactive, BOOL transitioning) {
     if (!NSThread.isMainThread) return;
-    if (light == lightMode && appInactive == inactive) return;
+    if (light == lightMode && appInactive == inactive && playerTransition == transitioning) return;
     light = lightMode;
     appInactive = inactive;
+    playerTransition = transitioning;
     for (id view in visualizers.allObjects) applyVisualizer(view);
 }
 
@@ -91,12 +92,13 @@ static void installBoolAnimation(Class cls, NSString *name) {
     SGPerfReplaceMethod(cls, selector, wrapper);
 }
 
-void SGInstallLightRendering(BOOL lightMode, BOOL inactive) {
+void SGInstallLightRendering(BOOL lightMode, BOOL inactive, BOOL transitioning) {
     if (!NSThread.isMainThread) return;
     static dispatch_once_t once;
     dispatch_once(&once, ^{
         light = lightMode;
         appInactive = inactive;
+        playerTransition = transitioning;
         visualizers = [NSHashTable weakObjectsHashTable];
         Class visualizer = NSClassFromString(@"SGVisualizerView");
         if (SGPerfHasMethod(visualizer, sel_registerName("running"), 'B', "") &&

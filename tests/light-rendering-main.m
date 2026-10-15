@@ -96,22 +96,22 @@ int main(int argc, const char **argv) {
         if ([mode isEqual:@"unsupported-visualizer"]) {
             Method m = class_getInstanceMethod(SGVisualizerView.class, @selector(setRunning:));
             class_addMethod(SGVisualizerView.class, @selector(setRunning:), method_getImplementation(m), "v24@0:8d16");
-            SGInstallLightRendering(YES, NO);
+            SGInstallLightRendering(YES, NO, NO);
             SGVisualizerView *v = view(YES);
             check(v.running && v.listening, "unsupported visualizer signature skips all visualizer hooks");
             puts("PASS: unsupported visualizer is untouched");
             return 0;
         }
         if ([mode isEqual:@"seeded"]) {
-            SGInstallLightRendering(YES, NO);
+            SGInstallLightRendering(YES, NO, NO);
             SGVisualizerView *v = view(YES);
             check(!v.running && !v.listening && !v.videoPlaying, "startup Light mode suppresses new processing");
-            SGApplyLightRendering(NO, NO);
+            SGApplyLightRendering(NO, NO, NO);
             check(v.running && v.listening, "startup owner request is restored");
             puts("PASS: startup Light mode rendering");
             return 0;
         }
-        SGInstallLightRendering(NO, NO);
+        SGInstallLightRendering(NO, NO, NO);
         SGVisualizerView *active = view(YES), *paused = view(NO);
         [paused updateLink];
         TestVisualizerModel *unrelated = [TestVisualizerModel new];
@@ -119,41 +119,54 @@ int main(int argc, const char **argv) {
         unrelated.accessAllowed = YES;
         unrelated.running = YES;
         check(active.running && active.listening && active.videoPlaying, "normal mode preserves original processing");
-        SGApplyLightRendering(YES, NO);
+        SGApplyLightRendering(YES, NO, NO);
         check(!active.running && !active.listening && !active.videoPlaying && active.invalidations == 1,
               "Light mode stops the pipeline, audio analysis and video input using the original update path");
         check(!paused.running && unrelated.listening, "owner pause and unrelated superclass are untouched");
         check([active.frame isEqual:@"current artwork"], "the existing static frame stays available");
         NSInteger updates = active.updates;
-        SGApplyLightRendering(YES, NO);
+        SGApplyLightRendering(YES, NO, NO);
         active.running = YES;
         check(active.updates == updates && !active.running, "unchanged policy and repeated owner resumes avoid rebuilding processing");
         SGVisualizerView *late = view(YES);
         check(!late.running && !late.listening, "new views cannot start processing while light");
         late.running = NO;
-        SGApplyLightRendering(NO, NO);
+        SGApplyLightRendering(NO, NO, NO);
         check(active.running && active.listening && !paused.running && !late.running,
               "leaving Light mode restores only the latest owner requests");
         active.accessAllowed = NO;
         [active updateLink];
-        SGApplyLightRendering(YES, NO);
-        SGApplyLightRendering(NO, NO);
+        SGApplyLightRendering(YES, NO, NO);
+        SGApplyLightRendering(NO, NO, NO);
         check(active.running && !active.listening, "restoration keeps the core's access checks");
         active.accessAllowed = YES;
         [active updateLink];
-        SGApplyLightRendering(YES, YES);
-        SGApplyLightRendering(NO, YES);
+        SGApplyLightRendering(YES, YES, NO);
+        SGApplyLightRendering(NO, YES, NO);
         check(!active.running && !active.listening, "turning light off cannot restart an inactive app");
-        SGApplyLightRendering(NO, NO);
+        SGApplyLightRendering(NO, NO, NO);
         check(active.running && active.listening, "activation resumes requested processing");
         __weak SGVisualizerView *released;
         @autoreleasepool { SGVisualizerView *temporary = view(YES); released = temporary; }
         check(!released, "renderer registry retains no views");
         __block BOOL nested = NO;
-        active.updated = ^{ if (!nested) { nested = YES; SGApplyLightRendering(NO, NO); } };
-        SGApplyLightRendering(YES, NO);
+        active.updated = ^{ if (!nested) { nested = YES; SGApplyLightRendering(NO, NO, NO); } };
+        SGApplyLightRendering(YES, NO, NO);
         check(active.running && active.listening, "latest reentrant policy wins");
         active.updated = nil;
+
+        SGApplyLightRendering(NO, NO, YES);
+        check(!active.running && !active.listening && !active.videoPlaying, "player transitions stop analysis and video even without Light mode");
+        SGVisualizerView *duringTransition = view(YES);
+        check(!duringTransition.listening, "new visualizers cannot start mid-transition");
+        SGApplyLightRendering(NO, NO, NO);
+        check(active.listening && duringTransition.listening, "transition completion restores current owner requests");
+        SGApplyLightRendering(NO, NO, YES);
+        duringTransition.running = NO;
+        SGApplyLightRendering(NO, YES, NO);
+        check(!active.listening && !duringTransition.listening, "inactive interruption cannot resume processing");
+        SGApplyLightRendering(NO, NO, NO);
+        check(active.listening && !duringTransition.listening, "interrupted transitions preserve owner pauses");
 
         SGRWarpLayer *warp = [SGRWarpLayer new];
         SGRPlayerAnimatedView *cover = [SGRPlayerAnimatedView new];
@@ -161,7 +174,7 @@ int main(int argc, const char **argv) {
         TestDecorations *other = [TestDecorations new];
         [warp setArtwork:@"first" animated:YES];
         check(warp.animated, "normal artwork animation is preserved");
-        SGApplyLightRendering(YES, NO);
+        SGApplyLightRendering(YES, NO, NO);
         [warp setArtwork:@"new art" animated:YES];
         check(!warp.animated && [warp.payload isEqual:@"new art"], "artwork updates without a background crossfade");
         warp.pendingAnimated = YES;
@@ -191,7 +204,7 @@ int main(int argc, const char **argv) {
         [cover fadeIn:cover.clip generation:10];
         check(!cover.leaving && cover.drops == 1 && cover.accepted == 1 && cover.crossfades == 0,
               "a ready current clip drops old video layers before showing without a crossfade");
-        SGApplyLightRendering(NO, NO);
+        SGApplyLightRendering(NO, NO, NO);
         [cover show:NO animated:YES];
         check(!cover.value && cover.animated, "normal animations return after Light mode");
         [cover show:YES animated:NO];
