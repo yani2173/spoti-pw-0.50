@@ -2,6 +2,7 @@
 #import "SGPerfSettings.h"
 #import "SGPerfABI.h"
 #import "SGLightRendering.h"
+#import "SGLyricsTiming.h"
 #import <objc/message.h>
 #import <objc/runtime.h>
 #include <stdatomic.h>
@@ -116,7 +117,7 @@ static SGPerfCoverState *coverState(id view) {
 
 static void applyCoverState(id view) {
     SGPerfCoverState *state = coverState(view);
-    BOOL playing = state.requestedPlaying && !sg_lightMode && !sg_inactive;
+    BOOL playing = state.requestedPlaying && !sg_lightMode && !suspended();
     if ([[view valueForKey:@"playing"] boolValue] != playing)
         sg_coverPlaying(view, NSSelectorFromString(@"setPlaying:"), playing);
 }
@@ -124,7 +125,7 @@ static void applyCoverState(id view) {
 static void setCoverPlaying(id view, SEL cmd, BOOL playing) {
     if (!NSThread.isMainThread) { sg_coverPlaying(view, cmd, playing); return; }
     coverState(view).requestedPlaying = playing;
-    sg_coverPlaying(view, cmd, playing && !sg_lightMode && !sg_inactive);
+    sg_coverPlaying(view, cmd, playing && !sg_lightMode && !suspended());
 }
 
 static void coverMovedToWindow(id view, SEL cmd) {
@@ -230,7 +231,7 @@ static void setActive(BOOL active) {
         sg_transitioning = NO;
         atomic_fetch_add_explicit(&sg_transitionGeneration, 1, memory_order_relaxed);
     }
-    SGApplyLightRendering(sg_lightMode, sg_inactive);
+    SGApplyLightRendering(sg_lightMode, sg_inactive, sg_transitioning);
     // A setter observer can create another link. Enumerate a snapshot so re-entrancy is safe.
     // Read the current state for each link. A setter observer can post another app notification;
     // the latest notification must win for the remainder of this snapshot too.
@@ -242,7 +243,7 @@ static void refreshLightMode(void) {
     BOOL on = desiredLightMode();
     if (on == sg_lightMode) return;
     sg_lightMode = on;
-    SGApplyLightRendering(sg_lightMode, sg_inactive);
+    SGApplyLightRendering(sg_lightMode, sg_inactive, sg_transitioning);
     for (SGPerfDisplayTarget *target in sg_targets.allObjects) applyState(target);
     for (id view in sg_animatedCovers.allObjects) applyCoverState(view);
 }
@@ -264,6 +265,8 @@ static void notificationTransition(BOOL transitioning) {
     void (^apply)(void) = ^{
         if (atomic_load_explicit(&sg_transitionGeneration, memory_order_relaxed) != generation) return;
         sg_transitioning = transitioning && !sg_inactive;
+        SGApplyLightRendering(sg_lightMode, sg_inactive, sg_transitioning);
+        for (id view in sg_animatedCovers.allObjects) applyCoverState(view);
         for (SGPerfDisplayTarget *target in sg_targets.allObjects) applyState(target);
         if (sg_transitioning) {
             // Normal completion comes from the player's transition coordinator, including a
@@ -271,6 +274,8 @@ static void notificationTransition(BOOL transitioning) {
             dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 10 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
                 if (atomic_load_explicit(&sg_transitionGeneration, memory_order_relaxed) != generation) return;
                 sg_transitioning = NO;
+                SGApplyLightRendering(sg_lightMode, sg_inactive, sg_transitioning);
+                for (id view in sg_animatedCovers.allObjects) applyCoverState(view);
                 for (SGPerfDisplayTarget *target in sg_targets.allObjects) applyState(target);
             });
         }
@@ -379,7 +384,8 @@ void SGInstallPerformance(void) {
             SGPerfReplaceMethod(coverClass, NSSelectorFromString(@"didMoveToWindow"), (IMP)coverMovedToWindow);
             SGPerfReplaceMethod(coverClass, NSSelectorFromString(@"showClip:"), (IMP)showCoverClip);
         }
-        SGInstallLightRendering(sg_lightMode, sg_inactive);
+        SGInstallLightRendering(sg_lightMode, sg_inactive, sg_transitioning);
+        SGInstallLyricsTiming();
         SGInstallPerformanceSettings();
         NSLog(@"[spoti-perf] 0.51.0: lyrics lifecycle and player-transition suspension installed");
     });

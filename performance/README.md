@@ -25,7 +25,8 @@ The original link, timestamps, and callback arguments are forwarded unchanged.
 
 The mod's existing `spotifyglass.playerTransition` and `spotifyglass.playerTransitionEnded`
 notifications suspend lyrics, moving-background and visualizer links until the player's transition
-coordinator completes, including cancelled swipes. This avoids their per-frame work competing
+coordinator completes, including cancelled swipes. Visualizer input processing and animated player
+covers also stop during that interval, in normal mode as well as Light mode. This avoids their per-frame work competing
 with the player's animation. Links created or resumed by their owners mid-transition stay paused.
 An end event cannot resume an inactive app or a link paused by its owner. Normal frame rates are
 unchanged; there is no app-wide FPS cap or feature/access change.
@@ -166,14 +167,14 @@ lock-screen lyrics during playback on a device after installing the optimized bu
 
 ## Lighter rendering in Light mode
 
-`SGLightRendering.m` takes the effective manual/automatic policy and app activity from
+`SGLightRendering.m` takes the effective manual/automatic policy, app activity and transition state from
 `SGPerformance.m` on the main thread. It keeps visualizer views weakly and retains each owner's
 latest running request separately. It never overwrites the owner's preference or starts an
 owner-stopped view when the policy changes. Repeated unchanged policy updates avoid new work.
 
 The actual 0.51.0 `SGVisualizerView.setRunning:` (`0x2ecfec`, `v20@0:8B16`) writes `_running`
 only when changed and calls `updateLink` (`0x2ed0e0`, `v16@0:8`). `running` is at `0x2f0534`,
-`B16@0:8`. The add-on clamps that runtime request while Light mode or app inactivity applies,
+`B16@0:8`. The add-on clamps that runtime request while Light mode, app inactivity or a player transition applies,
 including creation/window/input updates through `updateLink`. It forwards the original method,
 so the original availability, window, power and heat checks still decide whether work can run.
 The original stop path invalidates the display link and updates its input consumers instead of
@@ -208,3 +209,40 @@ callbacks pass through. No new polling, per-frame scans, frame-rate limits or gl
 are introduced. Existing lyrics repairs, Light mode opt-in defaults and original Plus checks remain.
 The regression tests use stand-in renderers; actual memory, battery and frame pacing need measurement
 on a phone, and no numerical device-performance gain is claimed.
+
+
+## Indexed lyric timing in normal and Light mode
+
+The actual 0.51.0 `SGRKaraokeView.tick` calls `sungAt:into:focus:openBreak:` (`0xce558`,
+`Q48@0:8d16^q24^q32^q40`) on display ticks. The original method scans line starts and then
+line ends from the beginning of the song to select up to six active lines. Long lyrics therefore
+repeat work even when only a small number of rows are on screen. Other original methods already
+skip unchanged blur/fill/layout values; these guards are preserved.
+
+`SGLyricsTiming.m` uses `SGLyricsIndex.c` for songs with 32–16384 ordered timing spans. An
+upper-bound search finds the most recent started line; a maximum-end tree finds the first six
+still-active rows without rescanning expired lyrics. Building is O(n) once per timing rebuild;
+line selection is O(log n + k log n), k <= 6. Instrumental breaks retain their original ordered
+scan and precedence. Exact end/start boundaries, duplicate starts, overlapping lines, backward
+seeks, the latest-line fallback and the final 500 ms break rule preserve the original results.
+No timing or frame-rate request is changed, and queries perform no allocation after initialization.
+
+The hook requires verified method types and these non-fragile ivar encodings: `_kept` (`NSArray`),
+`_spans` (`^{?=qq}`), `_breaks` (`^{?=qqq}`), and `_breakCount` (`Q`). `timeLines` (`0xcaf38`,
+`v16@0:8`) frees/rebuilds those buffers; the add-on invalidates its index before that method runs,
+including equal-sized songs whose allocations reuse an address. It also checks pointer/count changes.
+The index belongs to the view, retains no view or source array, and uses at most 256 KiB of auxiliary
+storage. Short/unordered/unusually large data, failed allocation, non-finite time, unsupported ABI
+and off-main queries use the original method. An unsupported/failed index is not rebuilt per frame.
+
+The differential tests execute the **original arm64 method** from the checksum-pinned 0.51.0 kit
+under Unicorn 2.1.4, replacing only its `NSArray.count` message. They compare the compiled C index
+with thousands of original results for randomized overlaps, breaks, boundaries, large integers,
+duplicate starts and backward seeks. Additional macOS runtime tests cover hook installation,
+cache invalidation with buffer reuse, fallback paths and view lifetime. This tests timing selection,
+not iOS rendering, device FPS or Spotify audio. Install the optional emulator locally with
+`python3 -m pip install unicorn==2.1.4` to include these checks in `make test`; CI requires it.
+
+Transition regressions additionally cover normal-mode analysis/video shutdown, clips created or
+resumed mid-transition, owner pauses, inactive interruptions and recovery. The existing generation-
+checked transition-end/timeout logic applies the same policy to covers and visualizer inputs.
