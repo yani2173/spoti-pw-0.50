@@ -296,3 +296,39 @@ to a concrete compatible bundle ID. A mismatched wildcard fails before signing i
 an asterisk as the app ID. Profile decoding failures are fatal and temporary decoded profiles are
 cleaned up; `WIFI=0` uses USB and `WIFI=1` uses Wi-Fi. Signing credentials and physical installation
 are not exercised in automated tests.
+
+
+## Static song artwork in Light mode
+
+Pausing an animated cover left its last decoded video frame visible over the song artwork.
+Light mode now calls the original `show:NO animated:NO` path on registered
+`SGRPlayerAnimatedView` and `SGRPlayerVisualizerHost` instances. The core's own coverage and
+visibility callbacks reveal the current native artwork; no screenshot or old video frame is used
+as an image substitute. Cached clips and late readiness cannot show the overlay while Light mode
+is active. Normal scrolling/transition pauses retain their previous presentation.
+
+Each host's latest requested visibility is stored separately in view-owned associated state and a
+weak registry. Turning manual or automatic Light mode off restores that request. The animated
+view's `clear:` path is also intercepted: the core skips `show:NO` if already hidden, so a cleared
+clip must explicitly discard the saved show request to avoid resurrecting an empty/stale overlay.
+Unsupported method signatures skip the new visibility behavior; off-main calls pass through.
+Original generation checks still reject obsolete readiness and visibility completions.
+
+Verified in the pinned 0.51.0 core:
+- Animated `show:animated:` at `0xfd73c`, `v24@0:8B16B20`, updates `_shown`, calls `setCovers:NO`
+  at `0xfd804`, updates layer opacity and calls `shownChanged`. `shown` is `0xfe70c`, `B16@0:8`.
+- `coversChanged` block `0xff1d0` calls `SGRArtworkField.setCovered:`; `shownChanged` block
+  `0xff210` calls the native artwork refresh at `0x101e4c`. Hiding also advances `_lookGeneration`,
+  preventing a pending show completion from claiming coverage again.
+- `fadeIn:generation:` at `0xfe1b4` validates clip identity and generation before calling
+  `show:YES animated:YES` at `0xfe344`, including immediately ready cached clips.
+- `clear:` at `0xfe410`, `v20@0:8B16`, invalidates clip generation and removes `_clip`, but only
+  calls `show:NO` when `_shown` was true (`0xfe4b0`–`0xfe4dc`).
+- Visualizer host `show:animated:` at `0x1432e4` calls its coverage callback on hide at `0x143384`
+  and refreshes artwork at `0x143444`; `shown` is `0x14373c`, `B16@0:8`. Its coverage block
+  at `0x143b8c` calls the same native artwork field's `setCovered:`.
+
+Runtime regressions cover visible/cached/late clips, track changes, clear while hidden, owner hides,
+manual/automatic startup and recovery, weak lifetime, nested policy updates and unsupported ABI.
+They use stand-in hosts with the verified show/clear semantics; actual artwork appearance still
+requires verification on the phone after rebuilding the optimized IPA.

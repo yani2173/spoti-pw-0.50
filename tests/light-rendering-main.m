@@ -61,22 +61,49 @@ static void check(BOOL condition, const char *message) {
 @implementation SGRWarpLayer
 - (void)takePending { self.consumedAnimated = self.pendingAnimated; self.consumes++; }
 @end
-@interface SGRPlayerAnimatedView : TestDecorations
+// Model the core's show path: hiding the overlay uncovers native track artwork.
+@interface TestArtworkHost : TestDecorations
+@property(nonatomic) BOOL shown, nativeCoverVisible;
+@property(nonatomic, copy) NSString *artwork;
+@property(nonatomic, copy) void (^shownChanged)(void);
+@end
+@implementation TestArtworkHost
+- (instancetype)init {
+    if ((self = [super init])) _nativeCoverVisible = YES;
+    return self;
+}
+- (void)show:(BOOL)show animated:(BOOL)animated {
+    [super show:show animated:animated];
+    if (_shown == show) return;
+    _shown = show;
+    self.nativeCoverVisible = !show;
+    if (self.shownChanged) self.shownChanged();
+}
+@end
+@interface SGRPlayerAnimatedView : TestArtworkHost
 @property(nonatomic, strong) id clip;
 @property(nonatomic) uint64_t generation;
 @property(nonatomic) NSInteger leaving, drops, accepted, crossfades;
+- (void)clear:(BOOL)animated;
 - (void)dropLeaving;
 - (void)fadeIn:(id)clip generation:(uint64_t)revision;
 @end
 @implementation SGRPlayerAnimatedView
+- (void)clear:(BOOL)animated {
+    self.generation++;
+    self.clip = nil;
+    if (self.shown) [self show:NO animated:animated];
+    else [self dropLeaving];
+}
 - (void)dropLeaving { self.drops++; self.leaving = 0; }
 - (void)fadeIn:(id)clip generation:(uint64_t)revision {
     if (self.clip != clip || self.generation != revision) return;
     self.accepted++;
+    [self show:YES animated:YES];
     if (self.leaving) self.crossfades++;
 }
 @end
-@interface SGRPlayerVisualizerHost : TestDecorations
+@interface SGRPlayerVisualizerHost : TestArtworkHost
 @end
 @implementation SGRPlayerVisualizerHost
 @end
@@ -102,11 +129,29 @@ int main(int argc, const char **argv) {
             puts("PASS: unsupported visualizer is untouched");
             return 0;
         }
+        if ([mode isEqual:@"unsupported-artwork"]) {
+            for (Class cls in @[SGRPlayerAnimatedView.class, SGRPlayerVisualizerHost.class]) {
+                Method method = class_getInstanceMethod(cls, @selector(shown));
+                class_addMethod(cls, @selector(shown), method_getImplementation(method), "d16@0:8");
+            }
+            SGInstallLightRendering(YES, NO, NO);
+            for (TestArtworkHost *v in @[[SGRPlayerAnimatedView new], [SGRPlayerVisualizerHost new]]) {
+                [v show:YES animated:YES];
+                check(v.value, "unsupported visibility ABI leaves show requests unchanged");
+            }
+            puts("PASS: unsupported artwork visibility ABI");
+            return 0;
+        }
         if ([mode isEqual:@"seeded"]) {
             SGInstallLightRendering(YES, NO, NO);
             SGVisualizerView *v = view(YES);
             check(!v.running && !v.listening && !v.videoPlaying, "startup Light mode suppresses new processing");
+            SGRPlayerAnimatedView *cover = [SGRPlayerAnimatedView new];
+            cover.clip = @"cached";
+            [cover fadeIn:cover.clip generation:cover.generation];
+            check(!cover.shown && cover.nativeCoverVisible, "saved Light mode shows artwork for cached clips immediately");
             SGApplyLightRendering(NO, NO, NO);
+            check(cover.shown && !cover.nativeCoverVisible, "saved Light mode restores the current ready clip when disabled");
             check(v.running && v.listening, "startup owner request is restored");
             puts("PASS: startup Light mode rendering");
             return 0;
@@ -183,13 +228,13 @@ int main(int argc, const char **argv) {
         [cover setColor:@"blue" animated:YES];
         check(!cover.animated && [cover.payload isEqual:@"blue"], "color updates keep their content without animation");
         [cover show:YES animated:YES];
-        check(cover.value && !cover.animated, "cover visibility still updates immediately");
+        check(!cover.shown && cover.nativeCoverVisible && !cover.animated, "Light mode reveals static cover instead of a frozen frame");
         [cover setLyricsUp:YES animated:YES];
         check(cover.value && !cover.animated, "lyrics layout state still updates immediately");
         [cover dimFrom:0.75f animated:YES];
         check(cover.dim == 0.75f && !cover.animated, "float dimming argument is preserved");
         [host show:YES animated:YES];
-        check(host.value && !host.animated, "visualizer host opacity changes without fading");
+        check(!host.shown && host.nativeCoverVisible && !host.animated, "Light mode also reveals artwork behind the stopped visualizer");
         [host setLyricsUp:NO animated:YES];
         check(!host.value && !host.animated, "visualizer host keeps the requested lyric layout");
         [other show:YES animated:YES];
@@ -215,6 +260,47 @@ int main(int argc, const char **argv) {
         cover.leaving = 1;
         [cover fadeIn:cover.clip generation:10];
         check(cover.leaving == 1 && cover.crossfades == 1, "normal clip crossfade behavior returns");
+        cover.artwork = @"song A";
+        [cover show:YES animated:NO];
+        [host show:YES animated:NO];
+        SGApplyLightRendering(YES, NO, NO);
+        check(!cover.shown && cover.nativeCoverVisible && !host.shown && host.nativeCoverVisible,
+              "enabling Light mode hides already-visible animated layers");
+        cover.artwork = @"song B";
+        cover.clip = @"cached B";
+        cover.generation++;
+        [cover fadeIn:cover.clip generation:cover.generation];
+        check(!cover.shown && [cover.artwork isEqual:@"song B"], "cached readiness cannot cover the new song's artwork");
+        SGApplyLightRendering(NO, NO, NO);
+        check(cover.shown && host.shown && [cover.clip isEqual:@"cached B"], "normal mode restores latest requested overlays");
+        SGApplyLightRendering(YES, NO, NO);
+        [cover clear:YES]; // Native clear skips show:NO because Light mode already hid it.
+        [host show:NO animated:NO];
+        SGApplyLightRendering(NO, NO, NO);
+        check(!cover.shown && !host.shown && cover.nativeCoverVisible,
+              "clearing or disabling an overlay while light cannot resurrect it later");
+        [cover fadeIn:@"cached B" generation:cover.generation - 1];
+        check(!cover.shown, "stale readiness after clear cannot resurrect an overlay");
+        [cover show:YES animated:NO];
+        SGApplyLightRendering(NO, NO, YES);
+        check(cover.shown, "temporary scrolling/transition suspension keeps normal presentation");
+        SGApplyLightRendering(NO, YES, NO);
+        check(cover.shown, "app inactivity alone does not replace the requested presentation");
+        SGApplyLightRendering(NO, NO, NO);
+        __weak TestArtworkHost *releasedHost;
+        @autoreleasepool {
+            SGRPlayerAnimatedView *temporary = [SGRPlayerAnimatedView new];
+            [temporary show:YES animated:NO];
+            releasedHost = temporary;
+        }
+        check(releasedHost == nil, "visibility registry never retains a player view");
+        __block BOOL changedPolicy = NO;
+        cover.shownChanged = ^{
+            if (!changedPolicy) { changedPolicy = YES; SGApplyLightRendering(NO, NO, NO); }
+        };
+        SGApplyLightRendering(YES, NO, NO);
+        check(cover.shown, "a reentrant latest policy wins without leaving artwork stuck");
+        cover.shownChanged = nil;
         puts("PASS: lighter rendering, owner state, inactivity, access, static frames, weak lifetime and decorative transitions");
     }
     return 0;
