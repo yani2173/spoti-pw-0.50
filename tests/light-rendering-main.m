@@ -287,13 +287,13 @@ int main(int argc, const char **argv) {
         SGApplyLightRendering(NO, YES, NO);
         check(cover.shown, "app inactivity alone does not replace the requested presentation");
         SGApplyLightRendering(NO, NO, NO);
-        __weak TestArtworkHost *released;
+        __weak TestArtworkHost *releasedHost;
         @autoreleasepool {
             SGRPlayerAnimatedView *temporary = [SGRPlayerAnimatedView new];
             [temporary show:YES animated:NO];
-            released = temporary;
+            releasedHost = temporary;
         }
-        check(released == nil, "visibility registry never retains a player view");
+        check(releasedHost == nil, "visibility registry never retains a player view");
         __block BOOL changedPolicy = NO;
         cover.shownChanged = ^{
             if (!changedPolicy) { changedPolicy = YES; SGApplyLightRendering(NO, NO, NO); }
