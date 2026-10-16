@@ -102,12 +102,17 @@ NSNotificationName const UIApplicationDidBecomeActiveNotification = @"UIApplicat
 @interface SGTestAnimatedCoverModel : NSObject
 @property (nonatomic) BOOL playing;
 @property (nonatomic) BOOL clipPlaying;
+@property (nonatomic) BOOL shown;
+- (void)show:(BOOL)shown animated:(BOOL)animated;
+- (void)clear:(BOOL)animated;
 @property (nonatomic) NSInteger windowMoves;
 @property (nonatomic, strong) id lastClip;
 - (void)didMoveToWindow;
 - (void)showClip:(id)clip;
 @end
 @implementation SGTestAnimatedCoverModel
+- (void)show:(BOOL)shown animated:(BOOL)animated { (void)animated; self.shown = shown; }
+- (void)clear:(BOOL)animated { if (self.shown) [self show:NO animated:animated]; }
 - (id)valueForKey:(NSString *)key {
     require(![key isEqualToString:@"playing"], "cover policy does not need KVC property lookup or boxing");
     return [super valueForKey:key];
@@ -188,6 +193,8 @@ int main(int argc, const char *argv[]) {
             CADisplayLink *lyrics = [CADisplayLink displayLinkWithTarget:view selector:@selector(tick)];
             SGRPlayerAnimatedView *cover = [SGRPlayerAnimatedView new];
             cover.playing = YES;
+            [cover show:YES animated:NO];
+            require(cover.shown == fair, "automatic Light mode also switches to static artwork");
             require(gpu.isPaused == !fair && cover.playing == fair && !lyrics.isPaused,
                     "saved automatic mode applies current startup conditions without stopping lyrics");
             require(![NSUserDefaults.standardUserDefaults boolForKey:SGPerformanceLightModeKey],
@@ -195,7 +202,7 @@ int main(int argc, const char *argv[]) {
             NSProcessInfo.processInfo.lowPowerModeEnabled = NO;
             NSProcessInfo.processInfo.thermalState = NSProcessInfoThermalStateNominal;
             notify(NSProcessInfoPowerStateDidChangeNotification);
-            require(!gpu.isPaused && cover.playing, "automatic startup mode restores visuals when conditions normalize");
+            require(!gpu.isPaused && cover.playing && cover.shown, "automatic startup mode restores visuals when conditions normalize");
             SGSetAutomaticLightMode(NO);
             puts("PASS: automatic Light mode startup conditions");
             return 0;
@@ -474,6 +481,11 @@ int main(int argc, const char *argv[]) {
         SGVisualizerView *nativeVisualizer = [SGVisualizerView new];
         nativeVisualizer.running = YES;
         require(nativeVisualizer.processing, "normal visualizer processing is initially enabled");
+        [cover show:YES animated:NO];
+        SGSetLightMode(YES);
+        require(!cover.shown && !cover.playing, "manual Light mode reveals artwork and pauses the clip together");
+        SGSetLightMode(NO);
+        require(cover.shown && cover.playing, "manual recovery restores visibility and requested playback");
         __block CADisplayLink *scrollGpu;
         __block SGRPlayerAnimatedView *scrollCover;
         __block SGVisualizerView *scrollVisualizer;

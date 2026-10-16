@@ -12,11 +12,68 @@
 @implementation SGLightVisualizerState
 @end
 
+@interface SGArtworkVisibility : NSObject
+@property(nonatomic) BOOL requestedShown;
+@property(nonatomic) IMP showOriginal;
+@end
+@implementation SGArtworkVisibility
+@end
+
 static BOOL light, appInactive, interactionSuspended;
 static NSHashTable *visualizers;
+static NSHashTable *artworkHosts;
 static char visualizerKey;
+static char visibilityKey;
 static void (*setRunningOriginal)(id, SEL, BOOL);
 static void (*updateLinkOriginal)(id, SEL);
+
+static SGArtworkVisibility *visibilityState(id view, IMP original) {
+    SGArtworkVisibility *state = objc_getAssociatedObject(view, &visibilityKey);
+    if (!state) {
+        state = [SGArtworkVisibility new];
+        state.requestedShown = ((BOOL (*)(id, SEL))objc_msgSend)(view, sel_registerName("shown"));
+        state.showOriginal = original;
+        objc_setAssociatedObject(view, &visibilityKey, state, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        [artworkHosts addObject:view];
+    }
+    return state;
+}
+
+static void applyArtworkVisibility(id view) {
+    SGArtworkVisibility *state = objc_getAssociatedObject(view, &visibilityKey);
+    BOOL show = state.requestedShown && !light;
+    if (((BOOL (*)(id, SEL))objc_msgSend)(view, sel_registerName("shown")) != show)
+        ((void (*)(id, SEL, BOOL, BOOL))state.showOriginal)(view, sel_registerName("show:animated:"), show, NO);
+}
+
+static BOOL installArtworkVisibility(Class cls, BOOL hasClear) {
+    SEL show = sel_registerName("show:animated:"), clear = sel_registerName("clear:");
+    if (!SGPerfHasMethod(cls, show, 'v', "BB") || !SGPerfHasMethod(cls, sel_registerName("shown"), 'B', "") ||
+        (hasClear && !SGPerfHasMethod(cls, clear, 'v', "B"))) return NO;
+    IMP original = method_getImplementation(class_getInstanceMethod(cls, show));
+    IMP wrapper = imp_implementationWithBlock(^(id view, BOOL requested, BOOL animated) {
+        if (NSThread.isMainThread) {
+            visibilityState(view, original).requestedShown = requested;
+            requested = requested && !light;
+            animated = animated && !light;
+        }
+        // The core's hide path updates coversChanged/shownChanged, restoring the
+        // current song's native artwork as well as hiding the animated layer.
+        ((void (*)(id, SEL, BOOL, BOOL))original)(view, show, requested, animated);
+    });
+    SGPerfReplaceMethod(cls, show, wrapper);
+    if (hasClear) {
+        void (*originalClear)(id, SEL, BOOL) = (void *)method_getImplementation(class_getInstanceMethod(cls, clear));
+        IMP clearWrapper = imp_implementationWithBlock(^(id view, BOOL animated) {
+            // clear: skips show:NO when already hidden. Forget the old request even
+            // in that branch, so leaving Light mode cannot resurrect a removed clip.
+            if (NSThread.isMainThread) visibilityState(view, original).requestedShown = NO;
+            originalClear(view, clear, animated);
+        });
+        SGPerfReplaceMethod(cls, clear, clearWrapper);
+    }
+    return YES;
+}
 
 static SGLightVisualizerState *visualizerState(id<SGLightVisualizer> view) {
     SGLightVisualizerState *state = objc_getAssociatedObject(view, &visualizerKey);
@@ -66,6 +123,7 @@ void SGApplyLightRendering(BOOL lightMode, BOOL inactive, BOOL interactionBusy) 
     appInactive = inactive;
     interactionSuspended = interactionBusy;
     for (id view in visualizers.allObjects) applyVisualizer(view);
+    for (id view in artworkHosts.allObjects) applyArtworkVisibility(view);
 }
 
 static BOOL animate(BOOL requested) {
@@ -100,6 +158,7 @@ void SGInstallLightRendering(BOOL lightMode, BOOL inactive, BOOL interactionBusy
         appInactive = inactive;
         interactionSuspended = interactionBusy;
         visualizers = [NSHashTable weakObjectsHashTable];
+        artworkHosts = [NSHashTable weakObjectsHashTable];
         Class visualizer = NSClassFromString(@"SGVisualizerView");
         if (SGPerfHasMethod(visualizer, sel_registerName("running"), 'B', "") &&
             SGPerfHasMethod(visualizer, sel_registerName("setRunning:"), 'v', "B") &&
@@ -128,10 +187,10 @@ void SGInstallLightRendering(BOOL lightMode, BOOL inactive, BOOL interactionBusy
         Class cover = NSClassFromString(@"SGRPlayerAnimatedView");
         Class host = NSClassFromString(@"SGRPlayerVisualizerHost");
         installObjectAnimation(cover, @"setColor:animated:");
-        for (NSString *name in @[@"show:animated:", @"setLyricsUp:animated:"]) {
-            installBoolAnimation(cover, name);
-            installBoolAnimation(host, name);
-        }
+        if (!installArtworkVisibility(cover, YES)) installBoolAnimation(cover, @"show:animated:");
+        if (!installArtworkVisibility(host, NO)) installBoolAnimation(host, @"show:animated:");
+        installBoolAnimation(cover, @"setLyricsUp:animated:");
+        installBoolAnimation(host, @"setLyricsUp:animated:");
         if (SGPerfHasMethod(cover, sel_registerName("dimFrom:animated:"), 'v', "fB")) {
             void (*original)(id, SEL, float, BOOL) = (void *)method_getImplementation(class_getInstanceMethod(cover, sel_registerName("dimFrom:animated:")));
             IMP wrapper = imp_implementationWithBlock(^(id view, float value, BOOL animated) {

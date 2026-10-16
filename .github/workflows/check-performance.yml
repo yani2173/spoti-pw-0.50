@@ -38,6 +38,7 @@ jobs:
           out/light-rendering-tests
           out/light-rendering-tests seeded
           out/light-rendering-tests unsupported-visualizer
+          out/light-rendering-tests unsupported-artwork
       - name: Test timing index lifecycle and fallback
         run: |
           xcrun clang -fobjc-arc -Wall -Wextra -Werror tests/lyrics-timing-main.m performance/SGLyricsTiming.m performance/SGLyricsIndex.c -framework Foundation -o out/lyrics-timing-tests
